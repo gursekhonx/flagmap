@@ -11,9 +11,9 @@ Built for jeopardy-style CTFs (like CyberSci regionals) where web challenges
 sometimes hand you the source code. Instead of eyeballing every file, point
 flagmap at the folder and get a triaged list of what's worth trying first.
 
-## Architecture (v1.1.0)
+## Architecture (v1.2.0)
 
-**Python, JavaScript, PHP and Go are matched structurally**, via
+**Python, JavaScript, PHP, Go, Java and Ruby are matched structurally**, via
 [`tree-sitter`](https://tree-sitter.github.io/tree-sitter/) parse trees
 (`flagmap/ast_engine.py`), not regex. Earlier versions matched everything
 with regex, and a recurring category of bug kept coming back during testing
@@ -41,24 +41,38 @@ tree, not a sequence of lines. Matching the actual parse tree instead:
   just a different field of the same call node, instead of needing two
   separate detection mechanisms for the two shapes.
 
-**Java, Ruby, Lua and Rust still go through the legacy regex engine**
+**Lua and Rust still go through the legacy regex engine**
 (`flagmap/patterns.py` + `flagmap/taint.py`) — they haven't been ported to
 tree-sitter yet. Porting them is mechanical (the same per-language
 config tables in `ast_engine.py`, extended with that language's grammar and
-node-field names) — Go's port (below) is the template to copy. Note that
-`taint.py`'s "taint-lite" layer only ever covered PHP/Python/JS in the first
-place — **Go had zero cross-statement taint tracking before this port**, not
-a worse version of it; only single-line regex patterns in `patterns.py`
-applied. So this wasn't just "regex → AST" for Go, it was "no taint flow at
-all → real taint flow." Java/Ruby/Lua/Rust are in the same position today.
+node-field names) — Go/Java/Ruby's ports (below) are the template to copy.
+Note that `taint.py`'s "taint-lite" layer only ever covered PHP/Python/JS in
+the first place — **Go/Java/Ruby had zero cross-statement taint tracking
+before these ports**, not a worse version of it; only single-line regex
+patterns in `patterns.py` applied. So this wasn't "regex → AST" for those
+three, it was "no taint flow at all → real taint flow." Lua/Rust are in the
+same position today.
 
-Go's port added one structural wrinkle the others didn't have: Go's
-`:=`/`=` always wrap both sides in an `expression_list` (to support
-multi-value assignment and the idiomatic `result, err := someCall()`
-pattern), so a single generic "left field, right field" assumption doesn't
-work — see `_assign_lhs_rhs`'s Go branch for how a single right-hand
-expression still gets walked for sinks even when the left side has multiple
-names and can't be cleanly taint-propagated to one of them.
+Each port surfaced its own structural wrinkle the others didn't have:
+
+- **Go**: `:=`/`=` always wrap both sides in an `expression_list` (to
+  support multi-value assignment and the idiomatic `result, err :=
+  someCall()` pattern), so a single generic "left field, right field"
+  assumption doesn't work — see `_assign_lhs_rhs`'s Go branch for how a
+  single right-hand expression still gets walked for sinks even when the
+  left side has multiple names and can't be cleanly taint-propagated to
+  one of them.
+- **Java**: path-opening calls (`new File(path)`, `new
+  FileInputStream(path)`) are constructor calls
+  (`object_creation_expression`), not `method_invocation` — same reason
+  PHP's `include`/`require` needed their own pseudo-sink table
+  (`JAVA_PATH_CONSTRUCTOR_SINKS`) rather than fitting the regular
+  call-shaped `SINKS`.
+- **Ruby**: Rails' XSS footgun isn't a sink *function* at all — ERB
+  auto-escapes by default, so the vulnerability is calling `.html_safe` (a
+  receiver-slot sink, like PHP's `save()`) on tainted data to explicitly
+  turn escaping back off, not passing tainted data to some dangerous
+  function.
 
 **Misconfiguration scanning (`config_scanner.py`) stays regex-based for
 every file type**, deliberately — Dockerfiles, `nginx.conf`, `.env`, and
@@ -69,14 +83,15 @@ there was no real problem there to fix.
 If `tree-sitter` and its per-language grammar packages aren't installed,
 flagmap still works — it quietly falls back to the regex engine for
 Python/JS/PHP too (the same behavior as pre-1.0 versions) rather than
-erroring out; for Go that fallback means no taint tracking at all, same as
-before this port (see above). Each language's grammar is imported in its
-own `try/except` in `ast_engine.py`, so e.g. not having `tree-sitter-go`
-installed only drops Go back to the regex engine — it doesn't take
-Python/JS/PHP down with it. Install the grammars to get the structural
-engine's accuracy improvements: `pip install tree-sitter tree-sitter-python
-tree-sitter-javascript tree-sitter-php tree-sitter-go` (also listed in
-`setup.py`'s `install_requires`).
+erroring out; for Go/Java/Ruby that fallback means no taint tracking at
+all, same as before these ports (see above). Each language's grammar is
+imported in its own `try/except` in `ast_engine.py`, so e.g. not having
+`tree-sitter-go` installed only drops Go back to the regex engine — it
+doesn't take the other languages down with it. Install the grammars to get
+the structural engine's accuracy improvements: `pip install tree-sitter
+tree-sitter-python tree-sitter-javascript tree-sitter-php tree-sitter-go
+tree-sitter-java tree-sitter-ruby` (also listed in `setup.py`'s
+`install_requires`).
 
 ## What it catches
 
@@ -147,12 +162,17 @@ Ruby/Rails, Lua, Rust):
   with no signature/secret — trivially forgeable for any account
 - JWT `verify_signature` explicitly set to anything other than a literal
   `True` (commonly a variable that can resolve to `None`/`False`)
-- Java: unsafe deserialization (`readObject()` — ysoserial gadget-chain
-  territory), string-concatenated `executeQuery`/`executeUpdate`, 
-  `Runtime.exec()`/`ProcessBuilder` command injection, request-driven
-  `File`/`URL` construction (LFI/SSRF), a defaults-only
+- Java (AST-matched since v1.1.0, see "Architecture"): `executeQuery`/
+  `executeUpdate`/`execute` with a SQL string built from
+  `request.getParameter`/`getParameterValues`/`getHeader`/`getQueryString`
+  *anywhere upstream in the method* (not just a same-line concatenation),
+  `Runtime.getRuntime().exec()` with a tainted command, `new
+  File`/`FileInputStream`/`FileReader`/`FileOutputStream`/`FileWriter` with
+  a tainted path, `response.sendRedirect()` with a tainted target — plus
+  the regex layer's own unsafe deserialization (`readObject()` — ysoserial
+  gadget-chain territory), `ProcessBuilder` concatenation, a defaults-only
   `DocumentBuilderFactory` (XXE), `MessageDigest.getInstance("MD5"/"SHA-1")`,
-  `java.util.Random` used for tokens
+  `java.util.Random` used for tokens, which still run alongside it
 - Go (AST-matched since v1.1.0, see "Architecture"): `db.Query`/`QueryRow`/
   `Exec` with a SQL string built from `r.FormValue`/`r.URL.Query().Get`/
   `mux.Vars`/`chi.URLParam` *anywhere upstream in the function* (not just a
@@ -162,10 +182,16 @@ Ruby/Rails, Lua, Rust):
   request data straight to the `ResponseWriter` (XSS) — plus the regex
   layer's own `fmt.Sprintf`-based SQL/SSTI/SSRF/mass-assignment/
   insecure-randomness checks, which still run alongside it
-- Ruby/Rails: string-interpolated `where()`/`find_by_sql()`, backtick/
-  `system()`/`IO.popen` command interpolation, `Marshal.load`/`YAML.load`
-  deserialization, `params.permit!` mass assignment, `render inline:
-  params` SSTI, request-driven `File` reads
+- Ruby/Rails (AST-matched since v1.1.0, see "Architecture"): `execute`/
+  `exec_query` with a SQL string built from `params[...]`/`request.params`/
+  `cookies[...]`/`request.headers` *anywhere upstream in the method*,
+  `system`/`IO.popen` with a tainted command, `File.open` with a tainted
+  path, `Marshal.load`/`YAML.load` with tainted data, `redirect_to` with a
+  tainted target, and `.html_safe` called ON tainted data (ERB's
+  auto-escaping explicitly turned back off — a receiver-slot sink, not an
+  argument one) — plus the regex layer's own string-interpolated
+  `where()`/`find_by_sql()`, `params.permit!` mass assignment, `render
+  inline: params` SSTI, which still run alongside it
 - Lua: string-concatenated (`..`) SQL and `os.execute()`, `loadstring()`/
   `load()` on non-literal input (direct RCE)
 - Rust (intentionally light coverage — Rust's safety guarantees remove most
@@ -508,7 +534,7 @@ on the normal `python3` interpreter's path, is the reliable way to run it.
   (both engines share these maps) if it's a new vuln name. A new *source*
   (beyond `request.args/form/json/files`-style superglobal access) goes in
   `SOURCE_TEXT_RE`.
-- New taint sink, Java/Ruby/Lua/Rust (legacy regex engine) → add an entry
+- New taint sink, Lua/Rust (legacy regex engine) → add an entry
   to `SINKS` in `taint.py` (and the matching maps as above).
 - Porting a legacy-engine language to the AST engine → tree-sitter has a
   grammar package for most mainstream languages (`tree-sitter-go`,
@@ -537,7 +563,7 @@ on the normal `python3` interpreter's path, is the reliable way to run it.
 ## Roadmap ideas
 
 - ~~AST-based matching per language instead of regex~~ — done for Python/JS/
-  PHP in v1.0.0, Go in v1.1.0 (see "Architecture"); Java/Ruby/Lua/Rust still
+  PHP in v1.0.0, Go/Java/Ruby in v1.1.0 (see "Architecture"); Lua/Rust still
   need porting (see "Extending it").
 - Full interprocedural taint tracking (currently one hop only — a helper
   function's own parameters get seeded from its call sites, but taint

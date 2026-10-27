@@ -23,9 +23,9 @@ This module matches over the actual parse tree instead:
     which field of the call node we look at — SINKS below has one table
     instead of taint.py's separate SINKS/METHOD_SINKS mechanism.
 
-Java/Ruby/Lua/Rust are NOT covered here yet — they still go through the
-legacy regex engine in scanner.py/patterns.py/taint.py (see README for why,
-and for the porting plan this module's Go support just followed).
+Lua/Rust are NOT covered here yet — they still go through the legacy regex
+engine in scanner.py/patterns.py/taint.py (see README for why, and for the
+porting plan this module's Go/Java/Ruby support all followed).
 """
 
 import re
@@ -49,6 +49,20 @@ try:
 except ImportError:
     _TREE_SITTER_GO_AVAILABLE = False
 
+try:
+    import tree_sitter_java as _ts_java
+
+    _TREE_SITTER_JAVA_AVAILABLE = True
+except ImportError:
+    _TREE_SITTER_JAVA_AVAILABLE = False
+
+try:
+    import tree_sitter_ruby as _ts_ruby
+
+    _TREE_SITTER_RUBY_AVAILABLE = True
+except ImportError:
+    _TREE_SITTER_RUBY_AVAILABLE = False
+
 from .taint import SEVERITY_BY_VULN, WHY_BY_VULN, PAYLOAD_BY_VULN
 
 
@@ -63,6 +77,10 @@ if _TREE_SITTER_AVAILABLE:
     _PARSERS["php"] = _make_parser(_ts_php.language_php())
 if _TREE_SITTER_GO_AVAILABLE:
     _PARSERS["go"] = _make_parser(_ts_go.language())
+if _TREE_SITTER_JAVA_AVAILABLE:
+    _PARSERS["java"] = _make_parser(_ts_java.language())
+if _TREE_SITTER_RUBY_AVAILABLE:
+    _PARSERS["ruby"] = _make_parser(_ts_ruby.language())
 
 AST_SUPPORTED_LANGUAGES = set(_PARSERS.keys())
 
@@ -95,6 +113,8 @@ SCOPE_NODE_TYPES = {
     # it has no name (so it never gets one-hop interprocedural seeding,
     # which is fine: nothing calls an anonymous func by name anyway).
     "go": {"function_declaration", "method_declaration", "func_literal"},
+    "java": {"method_declaration", "constructor_declaration"},
+    "ruby": {"method", "singleton_method"},
 }
 
 CALL_NODE_TYPES = {
@@ -102,6 +122,8 @@ CALL_NODE_TYPES = {
     "js": {"call_expression"},
     "php": {"function_call_expression", "member_call_expression"},
     "go": {"call_expression"},
+    "java": {"method_invocation"},
+    "ruby": {"call"},
 }
 
 ASSIGN_NODE_TYPES = {
@@ -113,6 +135,11 @@ ASSIGN_NODE_TYPES = {
     # (`=`) both wrap their sides in an expression_list (to support multi-
     # value assignment), handled specially in _assign_lhs_rhs below.
     "go": {"short_var_declaration", "assignment_statement"},
+    # Java: `String sql = "...";` is a variable_declarator (name/value
+    # fields) nested inside local_variable_declaration, same shape as JS's
+    # variable_declarator; `sql = "...";` on its own is assignment_expression.
+    "java": {"assignment_expression", "variable_declarator"},
+    "ruby": {"assignment"},
 }
 
 IDENTIFIER_NODE_TYPE = {
@@ -120,6 +147,8 @@ IDENTIFIER_NODE_TYPE = {
     "js": "identifier",
     "php": "variable_name",
     "go": "identifier",
+    "java": "identifier",
+    "ruby": "identifier",
 }
 
 # A short regex checked only against the exact text of one already-AST
@@ -139,6 +168,15 @@ SOURCE_TEXT_RE = {
         r"""\br\.(?:FormValue|PostFormValue|URL\.Query|URL\.Path|Header\.Get|Cookie)\b"""
         r"""|\bmux\.Vars\b|\bchi\.URLParam\b"""
     ),
+    # javax.servlet's HttpServletRequest (raw Servlets and most lightweight
+    # Java frameworks built on it) plus Spark Java's queryParams.
+    "java": re.compile(r"""\.(?:getParameter|getParameterValues|getHeader|getQueryString|queryParams)\b"""),
+    # Rails/Sinatra-style controller `params[...]`/`request.params`, plus
+    # cookies/headers. Deliberately not matching bare `params` alone (every
+    # method in a Rails controller mentions it for completely unrelated
+    # reasons) — only the subscript/attribute-access shape that actually
+    # reads a value out.
+    "ruby": re.compile(r"""\bparams\s*\[|\brequest\.params\b|\bcookies\s*\[|\brequest\.headers\b"""),
 }
 
 SOURCE_CANDIDATE_NODE_TYPES = {
@@ -146,6 +184,8 @@ SOURCE_CANDIDATE_NODE_TYPES = {
     "js": {"member_expression", "subscript_expression"},
     "php": {"subscript_expression", "variable_name"},
     "go": {"call_expression", "selector_expression", "index_expression"},
+    "java": {"method_invocation"},
+    "ruby": {"element_reference", "call"},
 }
 
 # FastAPI/Flask-style: a route handler's own parameters are just as
@@ -231,7 +271,42 @@ SINKS = {
         "Fprintf": ("Cross-Site Scripting (XSS)", "arg1", "tainted"),
         "Fprint": ("Cross-Site Scripting (XSS)", "arg1", "tainted"),
     },
+    "java": {
+        # java.sql.Statement — "execute" is also ExecutorService.execute(
+        # Runnable), but that only matters if a Runnable reference happens
+        # to share a name with a tainted String, and AST findings are
+        # always confidence="possible" precisely for cases like this.
+        "executeQuery": ("SQL Injection", "arg0", "tainted"),
+        "executeUpdate": ("SQL Injection", "arg0", "tainted"),
+        "execute": ("SQL Injection", "arg0", "tainted"),
+        "exec": ("Command Injection", "arg0", "tainted"),  # Runtime.getRuntime().exec(cmd)
+        "sendRedirect": ("Open Redirect", "arg0", "tainted"),
+    },
+    "ruby": {
+        # ActiveRecord raw-SQL escape hatches.
+        "execute": ("SQL Injection", "arg0", "tainted"),
+        "exec_query": ("SQL Injection", "arg0", "tainted"),
+        "system": ("Command Injection", "arg0", "tainted"),
+        "popen": ("Command Injection", "arg0", "tainted"),
+        "open": ("Path Traversal / LFI", "arg0", "tainted"),
+        # Marshal.load / YAML.load on untrusted input — classic Rails RCE
+        # gadget-chain vector (see README's "What it catches").
+        "load": ("Unsafe Deserialization", "arg0", "tainted"),
+        "redirect_to": ("Open Redirect", "arg0", "tainted"),
+        # `.html_safe` is Rails' explicit "turn off auto-escaping" footgun —
+        # ERB escapes by default, so the vulnerability IS calling this on
+        # tainted data, not any particular sink function. Receiver-slot,
+        # not arg-slot: the thing that must be tainted is the string this
+        # is called ON, not anything passed to it (it takes no arguments).
+        "html_safe": ("Cross-Site Scripting (XSS)", "receiver", "tainted"),
+    },
 }
+
+# Java-only: `new File(path)`/`new FileInputStream(path)`/etc. are
+# constructor calls (object_creation_expression), not method_invocation —
+# same reason PHP's include/require needed their own pseudo-sink table
+# rather than fitting the regular call-shaped SINKS above.
+JAVA_PATH_CONSTRUCTOR_SINKS = {"File", "FileInputStream", "FileReader", "FileOutputStream", "FileWriter"}
 
 # PHP-only: include/require are language constructs, not function calls, so
 # they get their own node types in the grammar rather than showing up as a
@@ -361,6 +436,12 @@ def _assign_lhs_rhs(node, language):
             lhs = left_children[0] if len(left_children) == 1 else None
             return lhs, rhs
         return None, None
+    if language == "java":
+        if t == "variable_declarator":
+            return node.child_by_field_name("name"), node.child_by_field_name("value")
+        return node.child_by_field_name("left"), node.child_by_field_name("right")
+    if language == "ruby":
+        return node.child_by_field_name("left"), node.child_by_field_name("right")
     return None, None
 
 
@@ -428,6 +509,24 @@ def _call_info(node, language):
         if fn.type == "identifier":
             return _text(fn), False, None, args
         return None
+    if language == "java":
+        if t != "method_invocation":
+            return None
+        name_node = node.child_by_field_name("name")
+        args = node.child_by_field_name("arguments")
+        if name_node is None:
+            return None
+        obj = node.child_by_field_name("object")
+        return _text(name_node), obj is not None, obj, args
+    if language == "ruby":
+        if t != "call":
+            return None
+        method_node = node.child_by_field_name("method")
+        if method_node is None:
+            return None
+        args = node.child_by_field_name("arguments")
+        receiver = node.child_by_field_name("receiver")
+        return _text(method_node), receiver is not None, receiver, args
     return None
 
 
@@ -505,6 +604,19 @@ def _check_php_pseudo_sink(node, state: _ScopeState, findings, path, lines):
         _emit(findings, path, lines, node, vuln, matched)
 
 
+def _check_java_path_constructor(node, state: _ScopeState, findings, path, lines):
+    type_node = node.child_by_field_name("type")
+    if type_node is None or _text(type_node) not in JAVA_PATH_CONSTRUCTOR_SINKS:
+        return
+    args = node.child_by_field_name("arguments")
+    target = _nth_arg_expr(args, "java", 0)
+    if target is None:
+        return
+    matched = _matched_taint_source(target, state.tainted, "java")
+    if matched:
+        _emit(findings, path, lines, node, "Path Traversal / LFI", matched)
+
+
 def _check_php_echo(node, state: _ScopeState, findings, path, lines):
     # Check each comma-separated echoed expression independently (`echo $a,
     # $b;` is valid PHP) so a safe-wrapped one doesn't mask an unsafe one,
@@ -578,6 +690,14 @@ def _param_names(func_node, language) -> List[Optional[str]]:
                 names.append(_text(vn) if vn else None)
             else:
                 names.append(None)
+        elif language == "java":
+            if p.type == "formal_parameter":
+                vn = p.child_by_field_name("name")
+                names.append(_text(vn) if vn else None)
+            else:
+                names.append(None)
+        elif language == "ruby":
+            names.append(_text(p) if p.type == "identifier" else None)
         else:
             names.append(None)
     return names
@@ -711,6 +831,13 @@ def _walk(node, language, state: _ScopeState, ctx: _Ctx):
     if language == "php" and t in PHP_PSEUDO_SINKS:
         if not ctx.recording:
             _check_php_pseudo_sink(node, state, findings, path, lines)
+        for c in node.named_children:
+            _walk(c, language, state, ctx)
+        return
+
+    if language == "java" and t == "object_creation_expression":
+        if not ctx.recording:
+            _check_java_path_constructor(node, state, findings, path, lines)
         for c in node.named_children:
             _walk(c, language, state, ctx)
         return
