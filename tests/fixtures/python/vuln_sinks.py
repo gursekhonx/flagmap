@@ -75,3 +75,19 @@ def typed_route(user_id: int):
     # route path params are just as attacker-controlled as request.args
     cur.execute(f"SELECT * FROM users WHERE id = {user_id}")  # ruleid: SQL Injection
     return "ok"
+
+
+class UserController:
+    # one-hop interprocedural through a CLASS METHOD: `self` is the
+    # implicit receiver, excluded from self.run_query(...)'s call-site
+    # arguments (as it always is at any Python call site) — the seeding
+    # logic has to drop `self` from run_query's own parameter list too, or
+    # every real parameter's index is off by one and seeding silently
+    # fails for every method in the codebase, not just this one.
+    @app.route("/search3")
+    def search3(self):
+        name = request.args.get("name")
+        self.run_query(f"SELECT * FROM users WHERE name = '{name}'")
+
+    def run_query(self, q):
+        cur.execute(q)  # ruleid: SQL Injection

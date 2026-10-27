@@ -11,9 +11,9 @@ Built for jeopardy-style CTFs (like CyberSci regionals) where web challenges
 sometimes hand you the source code. Instead of eyeballing every file, point
 flagmap at the folder and get a triaged list of what's worth trying first.
 
-## Architecture (v1.2.0)
+## Architecture (v1.3.0)
 
-**Python, JavaScript, PHP, Go, Java and Ruby are matched structurally**, via
+**All eight supported languages are matched structurally**, via
 [`tree-sitter`](https://tree-sitter.github.io/tree-sitter/) parse trees
 (`flagmap/ast_engine.py`), not regex. Earlier versions matched everything
 with regex, and a recurring category of bug kept coming back during testing
@@ -41,17 +41,26 @@ tree, not a sequence of lines. Matching the actual parse tree instead:
   just a different field of the same call node, instead of needing two
   separate detection mechanisms for the two shapes.
 
-**Lua and Rust still go through the legacy regex engine**
-(`flagmap/patterns.py` + `flagmap/taint.py`) — they haven't been ported to
-tree-sitter yet. Porting them is mechanical (the same per-language
-config tables in `ast_engine.py`, extended with that language's grammar and
-node-field names) — Go/Java/Ruby's ports (below) are the template to copy.
-Note that `taint.py`'s "taint-lite" layer only ever covered PHP/Python/JS in
-the first place — **Go/Java/Ruby had zero cross-statement taint tracking
-before these ports**, not a worse version of it; only single-line regex
-patterns in `patterns.py` applied. So this wasn't "regex → AST" for those
-three, it was "no taint flow at all → real taint flow." Lua/Rust are in the
-same position today.
+Lua and Rust were the last two languages ported (v1.3.0), closing out what
+Go/Java/Ruby started in v1.1.0/v1.2.0. Note that `taint.py`'s "taint-lite"
+layer only ever covered PHP/Python/JS in the first place — **Go, Java,
+Ruby, Lua and Rust all had zero cross-statement taint tracking before their
+respective ports**, not a worse version of it; only single-line regex
+patterns in `patterns.py` applied before. So none of these five ports were
+"regex → AST" — each was "no taint flow at all → real taint flow."
+
+As of v1.3.0, `taint.py`'s regex-based `find_tainted_sinks`/
+`find_format_string_sinks` functions are effectively **fallback-only**:
+every language flagmap supports now has an AST path, so those functions
+only run at all if a language's tree-sitter grammar package isn't
+installed — and even then, they only ever had source/sink tables for
+Python/JS/PHP, so Go/Java/Ruby/Lua/Rust get *no* taint-lite coverage in
+that fallback case either (same "regex-only, no taint tracking" situation
+as before any of these languages were ported — see "Install" below for
+why this is an unlikely edge case in practice). `taint.py`'s
+`SEVERITY_BY_VULN`/`WHY_BY_VULN`/`PAYLOAD_BY_VULN` maps are a separate,
+still fully-live piece of that file — both engines share them for every
+language, ported or not.
 
 Each port surfaced its own structural wrinkle the others didn't have:
 
@@ -73,6 +82,58 @@ Each port surfaced its own structural wrinkle the others didn't have:
   receiver-slot sink, like PHP's `save()`) on tainted data to explicitly
   turn escaping back off, not passing tainted data to some dangerous
   function.
+- **Lua**: `..` string concatenation (not a method call) builds most
+  tainted SQL/shell strings, so taint still has to flow *through* a binary
+  operator node, not just a call's arguments. Colon-call sugar
+  (`obj:method(x)` ⇒ implicit `obj` receiver, `x` as the only explicit
+  arg) needed its own three-way dispatch in `_call_info` alongside plain
+  `identifier` calls and `.`-dot calls. `execute` was deliberately mapped
+  only to Command Injection (`os.execute`), not also SQL Injection, because
+  some Lua DB drivers also name their raw-query method `execute` — one
+  callee name can only point at one vuln class in `SINKS`, so the
+  less-ambiguous mapping was kept and the regex layer left to catch the
+  DB-driver case independently.
+- **Rust**: `Command::new`/bare `.new()` were deliberately **not** added as
+  sinks — `new()` is Rust's universal constructor-method convention, so
+  treating it as a sink would flag practically every struct in a typical
+  codebase. `format!`-built SQL was also deliberately left uncovered here:
+  macro arguments live inside an opaque `token_tree` node with no normal
+  expression-grammar shape to match against, so that case is left to the
+  pre-existing regex layer rather than forcing an AST match that doesn't
+  fit the grammar.
+
+**Three index-alignment bugs, found and fixed during the Lua/Rust port**:
+every language's implicit method receiver (`self`, `this`, a colon-call's
+qualifying object) is excluded from a call site's explicit argument list —
+and the called function's own declared-parameter list has to exclude that
+same implicit receiver too, one-for-one, or every real parameter after it
+is off by one position relative to the call-site arguments, which silently
+breaks one-hop interprocedural taint seeding for every such method in the
+codebase, not just one. This class of bug showed up three times:
+
+- **Lua**: `function Handler:run_search(term)`'s *definition-site* name
+  field is the whole `method_index_expression` ("Handler:run_search"), not
+  the bare method name — so it was being registered under a name a
+  bare-method-name call site (`self:run_search(term)`) could never resolve
+  to. Fixed in `_func_def_name` by pulling out just the `method`/`field`
+  sub-field's text for Lua's `method_index_expression`/
+  `dot_index_expression` name shapes.
+- **Rust**: `&self` is its own distinct `self_parameter` node type (not a
+  regular `parameter`), and it was being recorded as a placeholder
+  parameter slot in `_param_names` instead of being skipped — shifting
+  every subsequent real parameter's index by one. Fixed by skipping
+  `self_parameter` entirely rather than reserving a slot for it.
+- **Python (pre-existing, not introduced by this port — found while
+  checking whether the same bug class was systemic)**: Python's `self`
+  has no distinct node type marking it — it's an ordinary `identifier`
+  parameter — so `self.run_query(x)` calling into `def run_query(self,
+  q):` was silently misaligning every real parameter the same way. Fixed
+  with a new `_is_python_self_param` helper (checks both class-body
+  ancestry and that the literal name is `self`/`cls`, so a `@staticmethod`
+  whose real first parameter isn't named either of those is left alone)
+  wired into `_param_names`. JS and PHP were checked and are unaffected —
+  neither grammar represents `this`/`$this` as an explicit parameter at
+  all, so there was nothing to misalign.
 
 **Misconfiguration scanning (`config_scanner.py`) stays regex-based for
 every file type**, deliberately — Dockerfiles, `nginx.conf`, `.env`, and
@@ -83,15 +144,16 @@ there was no real problem there to fix.
 If `tree-sitter` and its per-language grammar packages aren't installed,
 flagmap still works — it quietly falls back to the regex engine for
 Python/JS/PHP too (the same behavior as pre-1.0 versions) rather than
-erroring out; for Go/Java/Ruby that fallback means no taint tracking at
-all, same as before these ports (see above). Each language's grammar is
-imported in its own `try/except` in `ast_engine.py`, so e.g. not having
-`tree-sitter-go` installed only drops Go back to the regex engine — it
-doesn't take the other languages down with it. Install the grammars to get
-the structural engine's accuracy improvements: `pip install tree-sitter
-tree-sitter-python tree-sitter-javascript tree-sitter-php tree-sitter-go
-tree-sitter-java tree-sitter-ruby` (also listed in `setup.py`'s
-`install_requires`).
+erroring out; for Go/Java/Ruby/Lua/Rust that fallback means no taint
+tracking at all, same as before any of these five were ported (see above).
+Each language's grammar is imported in its own `try/except` in
+`ast_engine.py`, so e.g. not having `tree-sitter-go` installed only drops
+Go back to the regex engine — it doesn't take the other languages down
+with it. Install the grammars to get the structural engine's accuracy
+improvements: `pip install tree-sitter tree-sitter-python
+tree-sitter-javascript tree-sitter-php tree-sitter-go tree-sitter-java
+tree-sitter-ruby tree-sitter-lua tree-sitter-rust` (also listed in
+`setup.py`'s `install_requires`).
 
 ## What it catches
 
@@ -192,12 +254,21 @@ Ruby/Rails, Lua, Rust):
   argument one) — plus the regex layer's own string-interpolated
   `where()`/`find_by_sql()`, `params.permit!` mass assignment, `render
   inline: params` SSTI, which still run alongside it
-- Lua: string-concatenated (`..`) SQL and `os.execute()`, `loadstring()`/
-  `load()` on non-literal input (direct RCE)
-- Rust (intentionally light coverage — Rust's safety guarantees remove most
-  of what flagmap targets): bare-variable `Command::new()`, `format!`-built
-  SQL, bare-variable filesystem calls, presence of an `unsafe` block as a
-  manual-review flag
+- Lua (AST-matched since v1.3.0, see "Architecture"): `..`-concatenated SQL
+  passed to a colon-call query method (`db:query(...)`, `conn:execute(...)`)
+  with the tainted value built *anywhere upstream in the function* (not
+  just a same-line concatenation), `os.execute()`/`load()`/`loadstring()`
+  with a tainted command/code string, `io.open()` with a tainted path,
+  `ngx.redirect()` with a tainted target — plus the regex layer's own
+  checks, which still run alongside it
+- Rust (AST-matched since v1.3.0, see "Architecture"; intentionally light
+  coverage — Rust's safety guarantees remove most of what flagmap targets):
+  `.query`/`.execute` with a SQL string built from a tainted HTTP-request
+  value *anywhere upstream in the function or `&self` method*, `File::open`
+  with a tainted path — plus the regex layer's own bare-variable
+  `Command::new()`, `format!`-built SQL (deliberately left to regex — see
+  "Architecture"), bare-variable filesystem calls, and `unsafe`-block
+  manual-review flag, which still run alongside it
 - EJS `<%- %>` and Handlebars `{{{ }}}` — the raw/unescaped-output tags of
   their respective template engines (the escaped forms are `<%=` / `{{ }}`)
 - A hand-rolled recursive merge utility with no guard of its own (`key in
@@ -278,20 +349,21 @@ history for real CyberSci challenges this was tested against.
 
 ## Install
 
-As of v1.0.0, flagmap depends on `tree-sitter` plus the Python/JavaScript/PHP
-grammar packages for the structural matching engine (see "Architecture"
-above). It still *works* without them — it falls back to the regex engine
-for every language — but install them to get the accuracy improvement:
+As of v1.3.0, flagmap depends on `tree-sitter` plus a grammar package for
+each of its 8 supported languages for the structural matching engine (see
+"Architecture" above). It still *works* without them — any language whose
+grammar isn't installed falls back to the regex engine (see "Architecture"
+for what that costs) — but install them to get the accuracy improvement:
 
 ```bash
 cd flagmap
 pip install -e .
 ```
 
-`pip install -e .` pulls in `tree-sitter`/`tree-sitter-python`/
-`tree-sitter-javascript`/`tree-sitter-php` automatically via
-`install_requires` in `setup.py`. This gives you a `flagmap` command. Or
-just run it without installing:
+`pip install -e .` pulls in `tree-sitter` and all 8 grammar packages
+(`tree-sitter-python`/`-javascript`/`-php`/`-go`/`-java`/`-ruby`/`-lua`/
+`-rust`) automatically via `install_requires` in `setup.py`. This gives you
+a `flagmap` command. Or just run it without installing:
 
 ```bash
 python3 -m flagmap <path>
@@ -471,10 +543,10 @@ flagmap/
     __init__.py
     __main__.py          # python -m flagmap entry point
     cli.py                # argparse CLI, report formatting
-    scanner.py            # file walking + dispatch to the AST engine (py/js/php) or regex engine (everything else)
-    ast_engine.py          # tree-sitter structural matching + scoped taint tracking (py/js/php)
-    patterns.py            # the code vuln pattern database (regex; all languages, incl. py/js/php single-line checks)
-    taint.py              # legacy regex taint-lite + format-string-injection pass (go/java/ruby/lua/rust only)
+    scanner.py            # file walking + dispatch to the AST engine (all 8 langs) or regex-only fallback (if a grammar's missing)
+    ast_engine.py          # tree-sitter structural matching + scoped taint tracking (all 8 supported languages)
+    patterns.py            # the code vuln pattern database (regex; all languages, runs alongside the AST engine too)
+    taint.py              # severity/why/payload maps (shared by both engines) + legacy regex taint-lite, now fallback-only (py/js/php)
     heredoc.py             # pulls source embedded in Dockerfile heredocs back out for scanning
     csrf.py                 # best-effort missing-CSRF form check
     chains.py              # attack-path correlation over a scan's findings
@@ -524,29 +596,37 @@ on the normal `python3` interpreter's path, is the reliable way to run it.
 - New language → add its extension(s) to `EXTENSION_LANGUAGE` in
   `patterns.py`, then add `RAW_PATTERNS` entries tagged with that language
   name.
-- New taint sink, Python/JS/PHP → add an entry to `SINKS` in `ast_engine.py`:
-  `callee_name: (vuln_name, slot, var_set)`, where `slot` is `"argN"` (the
-  Nth argument must be tainted) or `"receiver"` (the object the method is
-  called ON must be tainted), and `var_set` is `"tainted"` (the normal
-  request-input taint) or `"built"` (the Format String Injection signal —
-  see its definition for what that's for). Add the matching
-  `SEVERITY_BY_VULN`/`WHY_BY_VULN`/`PAYLOAD_BY_VULN` entries in `taint.py`
-  (both engines share these maps) if it's a new vuln name. A new *source*
-  (beyond `request.args/form/json/files`-style superglobal access) goes in
-  `SOURCE_TEXT_RE`.
-- New taint sink, Lua/Rust (legacy regex engine) → add an entry
-  to `SINKS` in `taint.py` (and the matching maps as above).
-- Porting a legacy-engine language to the AST engine → tree-sitter has a
-  grammar package for most mainstream languages (`tree-sitter-go`,
-  `tree-sitter-java`, `tree-sitter-ruby`, ...). The work is: add it to
-  `_PARSERS` in `ast_engine.py`, then fill in that language's row in each of
+- New taint sink, any of the 8 AST-supported languages → add an entry to
+  `SINKS` in `ast_engine.py`: `callee_name: (vuln_name, slot, var_set)`,
+  where `slot` is `"argN"` (the Nth argument must be tainted) or
+  `"receiver"` (the object the method is called ON must be tainted), and
+  `var_set` is `"tainted"` (the normal request-input taint) or `"built"`
+  (the Format String Injection signal — see its definition for what that's
+  for). Add the matching `SEVERITY_BY_VULN`/`WHY_BY_VULN`/`PAYLOAD_BY_VULN`
+  entries in `taint.py` (both engines share these maps) if it's a new vuln
+  name. A new *source* (beyond `request.args/form/json/files`-style
+  superglobal access) goes in `SOURCE_TEXT_RE`.
+- New taint sink, a language with no tree-sitter grammar installed
+  (regex-fallback path) → add an entry to `SINKS` in `taint.py` (and the
+  matching maps as above) — note this only ever had table entries for
+  Python/JS/PHP, so it's only worth extending if you specifically need
+  taint-lite coverage for the no-grammar-installed case.
+- Porting a new language to the AST engine → tree-sitter has a grammar
+  package for most mainstream languages. The work is: add it to `_PARSERS`
+  in `ast_engine.py`, then fill in that language's row in each of
   `SCOPE_NODE_TYPES`/`CALL_NODE_TYPES`/`ASSIGN_NODE_TYPES`/
   `IDENTIFIER_NODE_TYPE`/`SOURCE_TEXT_RE`/`SOURCE_CANDIDATE_NODE_TYPES` by
   inspecting that grammar's node types and field names (`parser.parse(...)`
-  then print the tree — the module's own development process for Python/JS/
-  PHP was exactly this). The call-site/taint-propagation logic itself
-  (`_walk`, `_matched_taint_source`, the interprocedural seeding) is already
-  language-generic and needs no changes.
+  then print the tree — the module's own development process for every
+  language ported so far was exactly this). The call-site/taint-propagation
+  logic itself (`_walk`, `_matched_taint_source`, the interprocedural
+  seeding) is already language-generic and needs no changes. One thing
+  worth checking explicitly for any new language: if it has an implicit
+  method receiver (`self`/`this`/colon-call sugar), make sure
+  `_param_names` excludes it from the callee's own parameter list the same
+  way the call site excludes it from arguments — see "Architecture"'s
+  "three index-alignment bugs" note for why skipping this silently breaks
+  one-hop seeding for every method in that language.
 - New misconfiguration rule → add to `LINE_CHECKS_RAW` in `config_patterns.py`
   under the right category (or a new one), same tuple shape plus a `fix`
   string instead of `payload`. For something that needs absence-detection
@@ -562,9 +642,9 @@ on the normal `python3` interpreter's path, is the reliable way to run it.
 
 ## Roadmap ideas
 
-- ~~AST-based matching per language instead of regex~~ — done for Python/JS/
-  PHP in v1.0.0, Go/Java/Ruby in v1.1.0 (see "Architecture"); Lua/Rust still
-  need porting (see "Extending it").
+- ~~AST-based matching per language instead of regex~~ — done for all 8
+  supported languages: Python/JS/PHP in v1.0.0, Go in v1.1.0, Java/Ruby in
+  v1.2.0, Lua/Rust in v1.3.0 (see "Architecture").
 - Full interprocedural taint tracking (currently one hop only — a helper
   function's own parameters get seeded from its call sites, but taint
   doesn't propagate further than that, and each *file* is still analyzed

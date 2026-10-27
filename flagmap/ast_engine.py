@@ -23,9 +23,11 @@ This module matches over the actual parse tree instead:
     which field of the call node we look at — SINKS below has one table
     instead of taint.py's separate SINKS/METHOD_SINKS mechanism.
 
-Lua/Rust are NOT covered here yet — they still go through the legacy regex
-engine in scanner.py/patterns.py/taint.py (see README for why, and for the
-porting plan this module's Go/Java/Ruby support all followed).
+All eight CTF-relevant languages flagmap supports are now matched
+structurally here — see README's "Architecture" section for each port's
+own notes (Go's multi-value-assignment handling, Java's constructor-call
+pseudo-sinks, Ruby's receiver-slot html_safe, Lua's and Rust's narrower,
+collision-avoiding sink sets).
 """
 
 import re
@@ -63,6 +65,20 @@ try:
 except ImportError:
     _TREE_SITTER_RUBY_AVAILABLE = False
 
+try:
+    import tree_sitter_lua as _ts_lua
+
+    _TREE_SITTER_LUA_AVAILABLE = True
+except ImportError:
+    _TREE_SITTER_LUA_AVAILABLE = False
+
+try:
+    import tree_sitter_rust as _ts_rust
+
+    _TREE_SITTER_RUST_AVAILABLE = True
+except ImportError:
+    _TREE_SITTER_RUST_AVAILABLE = False
+
 from .taint import SEVERITY_BY_VULN, WHY_BY_VULN, PAYLOAD_BY_VULN
 
 
@@ -81,6 +97,10 @@ if _TREE_SITTER_JAVA_AVAILABLE:
     _PARSERS["java"] = _make_parser(_ts_java.language())
 if _TREE_SITTER_RUBY_AVAILABLE:
     _PARSERS["ruby"] = _make_parser(_ts_ruby.language())
+if _TREE_SITTER_LUA_AVAILABLE:
+    _PARSERS["lua"] = _make_parser(_ts_lua.language())
+if _TREE_SITTER_RUST_AVAILABLE:
+    _PARSERS["rust"] = _make_parser(_ts_rust.language())
 
 AST_SUPPORTED_LANGUAGES = set(_PARSERS.keys())
 
@@ -115,6 +135,10 @@ SCOPE_NODE_TYPES = {
     "go": {"function_declaration", "method_declaration", "func_literal"},
     "java": {"method_declaration", "constructor_declaration"},
     "ruby": {"method", "singleton_method"},
+    # function_definition: Lua's anonymous `local handler = function(req)
+    # ... end` idiom — same func_literal-style treatment as Go.
+    "lua": {"function_declaration", "function_definition"},
+    "rust": {"function_item"},
 }
 
 CALL_NODE_TYPES = {
@@ -124,6 +148,8 @@ CALL_NODE_TYPES = {
     "go": {"call_expression"},
     "java": {"method_invocation"},
     "ruby": {"call"},
+    "lua": {"function_call"},
+    "rust": {"call_expression"},
 }
 
 ASSIGN_NODE_TYPES = {
@@ -140,6 +166,14 @@ ASSIGN_NODE_TYPES = {
     # variable_declarator; `sql = "...";` on its own is assignment_expression.
     "java": {"assignment_expression", "variable_declarator"},
     "ruby": {"assignment"},
+    # Lua, like Go, wraps both sides in a list node (variable_list/
+    # expression_list) to support `a, b = f()` multi-assignment — same
+    # "still walk a single RHS even without a clean 1:1 name pairing"
+    # handling in _assign_lhs_rhs below. `local x = y` is this same
+    # assignment_statement node, just wrapped in a variable_declaration
+    # that _walk's generic recursion descends through unchanged.
+    "lua": {"assignment_statement"},
+    "rust": {"let_declaration", "assignment_expression"},
 }
 
 IDENTIFIER_NODE_TYPE = {
@@ -149,6 +183,8 @@ IDENTIFIER_NODE_TYPE = {
     "go": "identifier",
     "java": "identifier",
     "ruby": "identifier",
+    "lua": "identifier",
+    "rust": "identifier",
 }
 
 # A short regex checked only against the exact text of one already-AST
@@ -177,6 +213,17 @@ SOURCE_TEXT_RE = {
     # reasons) — only the subscript/attribute-access shape that actually
     # reads a value out.
     "ruby": re.compile(r"""\bparams\s*\[|\brequest\.params\b|\bcookies\s*\[|\brequest\.headers\b"""),
+    # OpenResty/nginx-lua's ngx.req accessors, plus a generic
+    # params./req.params. accessor for Lapis-style and custom frameworks.
+    # Only the SOURCE-RETURNING call/access itself needs to match here — a
+    # variable later assigned from one of these (`local args =
+    # ngx.req.get_uri_args()`) gets added to the tainted set by the normal
+    # assignment-propagation step, so `args.name` a line later is already
+    # covered by the plain identifier-in-tainted-set check with no extra
+    # pattern needed for the derived access.
+    "lua": re.compile(r"""\bngx\.req\.get_uri_args\b|\bngx\.req\.get_post_args\b|\bngx\.var\.arg_\w+\b|\bparams\."""),
+    # actix-web/common Rust web framework request accessors.
+    "rust": re.compile(r"""\.query_string\b|\.match_info\b|\.uri\(\)\.query\b"""),
 }
 
 SOURCE_CANDIDATE_NODE_TYPES = {
@@ -186,6 +233,8 @@ SOURCE_CANDIDATE_NODE_TYPES = {
     "go": {"call_expression", "selector_expression", "index_expression"},
     "java": {"method_invocation"},
     "ruby": {"element_reference", "call"},
+    "lua": {"function_call", "dot_index_expression"},
+    "rust": {"call_expression", "field_expression"},
 }
 
 # FastAPI/Flask-style: a route handler's own parameters are just as
@@ -299,6 +348,40 @@ SINKS = {
         # not arg-slot: the thing that must be tainted is the string this
         # is called ON, not anything passed to it (it takes no arguments).
         "html_safe": ("Cross-Site Scripting (XSS)", "receiver", "tainted"),
+    },
+    "lua": {
+        # os.execute(cmd) — the unambiguous, canonical stdlib shell-exec
+        # call. Deliberately NOT mapping "execute" to SQL Injection too
+        # (some Lua DB drivers, e.g. LuaSQL, also call their raw-query
+        # method "execute") — one callee name can only mean one vuln class
+        # in this table, and os.execute is the far more common/unambiguous
+        # of the two. "query" below covers the SQL side instead (matches
+        # lua-resty-mysql and friends) — the regex layer still independently
+        # catches LuaSQL-style `conn:execute(sql)` via its own SQL-keyword
+        # text pattern, which doesn't have this naming collision problem.
+        "execute": ("Command Injection", "arg0", "tainted"),
+        "popen": ("Command Injection", "arg0", "tainted"),
+        "query": ("SQL Injection", "arg0", "tainted"),
+        "open": ("Path Traversal / LFI", "arg0", "tainted"),
+        "load": ("Command Injection / RCE", "arg0", "tainted"),       # Lua 5.2+
+        "loadstring": ("Command Injection / RCE", "arg0", "tainted"),  # Lua 5.1
+        "redirect": ("Open Redirect", "arg0", "tainted"),  # ngx.redirect(url)
+    },
+    "rust": {
+        # Deliberately NOT including Command::new / File::open-via-`new` —
+        # "new" is Rust's universal constructor-method convention (every
+        # struct has one), so keying a sink on that bare name would flag
+        # unrelated constructors across the whole language. Also
+        # deliberately NOT trying to catch `format!`-built SQL here: a
+        # macro invocation's arguments are an opaque, unparsed token tree
+        # in tree-sitter (macros aren't part of Rust's normal expression
+        # grammar), so there's no clean AST shape to match against — the
+        # existing regex pattern already covers that shape and isn't
+        # actually disadvantaged by being regex-based here, unlike the
+        # string-concatenation cases AST matching fixed in other languages.
+        "execute": ("SQL Injection", "arg0", "tainted"),
+        "query": ("SQL Injection", "arg0", "tainted"),
+        "open": ("Path Traversal / LFI", "arg0", "tainted"),  # File::open(path)
     },
 }
 
@@ -442,6 +525,30 @@ def _assign_lhs_rhs(node, language):
         return node.child_by_field_name("left"), node.child_by_field_name("right")
     if language == "ruby":
         return node.child_by_field_name("left"), node.child_by_field_name("right")
+    if language == "lua":
+        # Same shape as Go: both sides are list nodes (variable_list/
+        # expression_list) with no field names of their own, to support
+        # `a, b = f()` multi-assignment — only a clean single<-single
+        # pairing gets taint PROPAGATED to a name, but a lone right-hand
+        # expression is still returned for _walk to recurse into (catching
+        # a sink call on the RHS) even when the left side has 2+ names.
+        if t == "assignment_statement":
+            var_list = next((c for c in node.named_children if c.type == "variable_list"), None)
+            expr_list = next((c for c in node.named_children if c.type == "expression_list"), None)
+            if var_list is None or expr_list is None:
+                return None, None
+            expr_children = expr_list.named_children
+            if len(expr_children) != 1:
+                return None, None
+            rhs = expr_children[0]
+            var_children = var_list.named_children
+            lhs = var_children[0] if len(var_children) == 1 else None
+            return lhs, rhs
+        return None, None
+    if language == "rust":
+        if t == "let_declaration":
+            return node.child_by_field_name("pattern"), node.child_by_field_name("value")
+        return node.child_by_field_name("left"), node.child_by_field_name("right")
     return None, None
 
 
@@ -527,6 +634,50 @@ def _call_info(node, language):
         args = node.child_by_field_name("arguments")
         receiver = node.child_by_field_name("receiver")
         return _text(method_node), receiver is not None, receiver, args
+    if language == "lua":
+        if t != "function_call":
+            return None
+        name_field = node.child_by_field_name("name")
+        args = node.child_by_field_name("arguments")
+        if name_field is None:
+            return None
+        if name_field.type == "method_index_expression":
+            method = name_field.child_by_field_name("method")
+            if method is None:
+                return None
+            return _text(method), True, name_field.child_by_field_name("table"), args
+        if name_field.type == "dot_index_expression":
+            field = name_field.child_by_field_name("field")
+            if field is None:
+                return None
+            return _text(field), True, name_field.child_by_field_name("table"), args
+        if name_field.type == "identifier":
+            return _text(name_field), False, None, args
+        return None
+    if language == "rust":
+        if t != "call_expression":
+            return None
+        fn = node.child_by_field_name("function")
+        args = node.child_by_field_name("arguments")
+        if fn is None:
+            return None
+        if fn.type == "field_expression":
+            field = fn.child_by_field_name("field")
+            if field is None:
+                return None
+            return _text(field), True, fn.child_by_field_name("value"), args
+        if fn.type == "scoped_identifier":
+            # `File::open(path)` — treats the qualifying path (`File`) as a
+            # pseudo-receiver, same as Go's package-qualified calls; no
+            # current rust sink keys on "receiver" slot, but this keeps the
+            # shape consistent and ready for one if that changes.
+            name_node = fn.child_by_field_name("name")
+            if name_node is None:
+                return None
+            return _text(name_node), True, fn.child_by_field_name("path"), args
+        if fn.type == "identifier":
+            return _text(fn), False, None, args
+        return None
     return None
 
 
@@ -649,7 +800,26 @@ def _seed_route_params(func_node, state: _ScopeState):
 
 def _func_def_name(func_node, language) -> Optional[str]:
     name_node = func_node.child_by_field_name("name")
-    return _text(name_node) if name_node is not None else None
+    if name_node is None:
+        return None
+    if language == "lua":
+        # Lua's idiomatic OOP method style, `function Handler:run_search(term)`
+        # (or the dot-defined equivalent, `function Handler.run_search(self,
+        # term)`), makes the "name" field a method_index_expression/
+        # dot_index_expression whose TEXT is the qualified "Handler:
+        # run_search" — but a call site (`self:run_search(term)`) only ever
+        # resolves the bare "run_search" part (see _call_info's lua branch).
+        # Using the qualified text as the registered key here would never
+        # match any real call site, silently breaking one-hop seeding for
+        # the single most common Lua OOP method-definition shape — so pull
+        # just the unqualified method/field name out instead.
+        if name_node.type == "method_index_expression":
+            method = name_node.child_by_field_name("method")
+            return _text(method) if method is not None else None
+        if name_node.type == "dot_index_expression":
+            field = name_node.child_by_field_name("field")
+            return _text(field) if field is not None else None
+    return _text(name_node)
 
 
 def _param_names(func_node, language) -> List[Optional[str]]:
@@ -661,6 +831,21 @@ def _param_names(func_node, language) -> List[Optional[str]]:
         return []
     names: List[Optional[str]] = []
     for p in params.named_children:
+        if language == "rust" and p.type == "self_parameter":
+            # `&self`/`&mut self`/`self` is never present in a `.`-call's
+            # explicit arguments (same as every other language's implicit
+            # receiver) — appending a None placeholder for it here would
+            # reserve a slot that shifts every real parameter's index one
+            # past where the call site's (receiver-less) argument list
+            # expects it, silently breaking one-hop seeding for every
+            # `&self` method. Skipping it outright (not even a None entry)
+            # keeps the two index spaces aligned.
+            continue
+        if language == "python" and p is params.named_children[0] and _is_python_self_param(func_node, p):
+            # Same index-alignment problem as Rust's self_parameter above,
+            # for Python's `self`/`cls` — see _is_python_self_param's
+            # docstring for why both the ancestry and the name check matter.
+            continue
         if language == "python":
             if p.type == "identifier":
                 names.append(_text(p))
@@ -698,9 +883,45 @@ def _param_names(func_node, language) -> List[Optional[str]]:
                 names.append(None)
         elif language == "ruby":
             names.append(_text(p) if p.type == "identifier" else None)
+        elif language == "lua":
+            names.append(_text(p) if p.type == "identifier" else None)
+        elif language == "rust":
+            if p.type == "parameter":
+                vn = p.child_by_field_name("pattern")
+                names.append(_text(vn) if vn else None)
+            else:
+                names.append(None)
         else:
             names.append(None)
     return names
+
+
+def _is_python_self_param(func_node, first_param) -> bool:
+    """Whether `first_param` is a plain-method's implicit self/cls — bound
+    automatically at the call site (`obj.method(x)` never passes it
+    explicitly), so it has to be excluded from the parameter-name list for
+    one-hop seeding's call-site-arg-index <-> param-index alignment to
+    hold, the same way Rust's distinctly-typed `self_parameter` node and
+    Lua's colon-method call shape already are elsewhere in this file.
+    Unlike those two, Python's `self`/`cls` is just an ordinary
+    "identifier" parameter with no structural marker of its own, so this
+    has to check two things instead of one node type: that the function
+    sits directly inside a class body (so a plain top-level function
+    merely happening to name its first param "self" is untouched — such a
+    function IS called with that argument explicit, e.g. `helper(x)`), and
+    that the first parameter's own name is actually "self"/"cls" (so an
+    `@staticmethod`, which shares the exact same class-body ancestry but
+    takes no implicit receiver, doesn't have its real first parameter
+    wrongly dropped)."""
+    if first_param is None or first_param.type != "identifier":
+        return False
+    if _text(first_param) not in ("self", "cls"):
+        return False
+    parent = func_node.parent
+    if parent is None or parent.type != "block":
+        return False
+    grandparent = parent.parent
+    return grandparent is not None and grandparent.type == "class_definition"
 
 
 def _collect_function_defs(root, language) -> dict:
