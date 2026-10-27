@@ -437,6 +437,39 @@ flagmap/
   sample_challenge/       # sample vulnerable files for testing
 ```
 
+## Testing
+
+`scripts/run_regression.py` is the regression safety net — run it after any
+change to `patterns.py` / `ast_engine.py` / `taint.py` before calling the
+change done, instead of manually re-running old CTF repos to eyeball the
+diff every time:
+
+```
+python3 scripts/run_regression.py -v
+```
+
+Fixtures live under `tests/fixtures/<language>/` and carry their own
+expectations as trailing comment markers (same idea as semgrep's own test
+convention):
+
+```python
+cur.execute(f"...{name}...")   # ruleid: SQL Injection   <- must fire, exact vuln_name
+cur.execute("SELECT 1", (x,))  # safe                     <- must NOT fire anything
+echo h($name);                 # safe: XSS                <- must not fire THIS vuln (others OK)
+```
+
+Each fixture file is both documentation of a known-good/known-bad shape and
+a standing assertion that it keeps behaving that way. Add a `ruleid`/`safe`
+line whenever a new sink, source, or false-positive guard is added, so the
+next change can't silently regress it without the suite catching it.
+
+Do **not** run this (or anything else in the repo) from inside a stale venv
+with an old editable install of flagmap sitting in it — that shadows the
+live source with whatever version was `pip install -e`'d there and produces
+false failures that look like real regressions. Plain `python3
+scripts/run_regression.py` from the repo root, with flagmap's dependencies
+on the normal `python3` interpreter's path, is the reliable way to run it.
+
 ## Extending it
 
 - New code-vuln rule → add to `RAW_PATTERNS` in `patterns.py`: each entry is
