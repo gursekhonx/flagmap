@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="flagmap",
-    version="1.0.1",
+    version="1.1.0",
     description="Scan CTF challenge source code for common web-exploitation vuln patterns, with suggested payloads.",
     packages=find_packages(),
     python_requires=">=3.8",
@@ -17,6 +17,7 @@ setup(
         "tree-sitter-python>=0.21",
         "tree-sitter-javascript>=0.21",
         "tree-sitter-php>=0.21",
+        "tree-sitter-go>=0.21",
     ],
     entry_points={
         "console_scripts": [

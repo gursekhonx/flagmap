@@ -11,9 +11,9 @@ Built for jeopardy-style CTFs (like CyberSci regionals) where web challenges
 sometimes hand you the source code. Instead of eyeballing every file, point
 flagmap at the folder and get a triaged list of what's worth trying first.
 
-## Architecture (v1.0.0)
+## Architecture (v1.1.0)
 
-**Python, JavaScript and PHP are matched structurally**, via
+**Python, JavaScript, PHP and Go are matched structurally**, via
 [`tree-sitter`](https://tree-sitter.github.io/tree-sitter/) parse trees
 (`flagmap/ast_engine.py`), not regex. Earlier versions matched everything
 with regex, and a recurring category of bug kept coming back during testing
@@ -41,11 +41,24 @@ tree, not a sequence of lines. Matching the actual parse tree instead:
   just a different field of the same call node, instead of needing two
   separate detection mechanisms for the two shapes.
 
-**Go, Java, Ruby, Lua and Rust still go through the legacy regex engine**
+**Java, Ruby, Lua and Rust still go through the legacy regex engine**
 (`flagmap/patterns.py` + `flagmap/taint.py`) — they haven't been ported to
 tree-sitter yet. Porting them is mechanical (the same per-language
 config tables in `ast_engine.py`, extended with that language's grammar and
-node-field names) but hasn't been done. Contributions welcome.
+node-field names) — Go's port (below) is the template to copy. Note that
+`taint.py`'s "taint-lite" layer only ever covered PHP/Python/JS in the first
+place — **Go had zero cross-statement taint tracking before this port**, not
+a worse version of it; only single-line regex patterns in `patterns.py`
+applied. So this wasn't just "regex → AST" for Go, it was "no taint flow at
+all → real taint flow." Java/Ruby/Lua/Rust are in the same position today.
+
+Go's port added one structural wrinkle the others didn't have: Go's
+`:=`/`=` always wrap both sides in an `expression_list` (to support
+multi-value assignment and the idiomatic `result, err := someCall()`
+pattern), so a single generic "left field, right field" assumption doesn't
+work — see `_assign_lhs_rhs`'s Go branch for how a single right-hand
+expression still gets walked for sinks even when the left side has multiple
+names and can't be cleanly taint-propagated to one of them.
 
 **Misconfiguration scanning (`config_scanner.py`) stays regex-based for
 every file type**, deliberately — Dockerfiles, `nginx.conf`, `.env`, and
@@ -56,10 +69,14 @@ there was no real problem there to fix.
 If `tree-sitter` and its per-language grammar packages aren't installed,
 flagmap still works — it quietly falls back to the regex engine for
 Python/JS/PHP too (the same behavior as pre-1.0 versions) rather than
-erroring out. Install the grammars to get the structural engine's accuracy
-improvements: `pip install tree-sitter tree-sitter-python
-tree-sitter-javascript tree-sitter-php` (also listed in `setup.py`'s
-`install_requires`).
+erroring out; for Go that fallback means no taint tracking at all, same as
+before this port (see above). Each language's grammar is imported in its
+own `try/except` in `ast_engine.py`, so e.g. not having `tree-sitter-go`
+installed only drops Go back to the regex engine — it doesn't take
+Python/JS/PHP down with it. Install the grammars to get the structural
+engine's accuracy improvements: `pip install tree-sitter tree-sitter-python
+tree-sitter-javascript tree-sitter-php tree-sitter-go` (also listed in
+`setup.py`'s `install_requires`).
 
 ## What it catches
 
@@ -136,11 +153,15 @@ Ruby/Rails, Lua, Rust):
   `File`/`URL` construction (LFI/SSRF), a defaults-only
   `DocumentBuilderFactory` (XXE), `MessageDigest.getInstance("MD5"/"SHA-1")`,
   `java.util.Random` used for tokens
-- Go: `exec.Command()` fed from the request or a bare variable, SQL built
-  with `fmt.Sprintf` (including at its construction site, before it's passed
-  to `db.Query()` elsewhere), `html/template`/`text/template` parsed from
-  request data (SSTI), request-driven file reads, `math/rand` used for
-  tokens
+- Go (AST-matched since v1.1.0, see "Architecture"): `db.Query`/`QueryRow`/
+  `Exec` with a SQL string built from `r.FormValue`/`r.URL.Query().Get`/
+  `mux.Vars`/`chi.URLParam` *anywhere upstream in the function* (not just a
+  same-line `fmt.Sprintf`), `exec.Command()` with a tainted program name,
+  `os.Open`/`ReadFile`/`Create`/`http.ServeFile` with a tainted path,
+  `http.Redirect` with a tainted target, `fmt.Fprintf`/`Fprint` writing
+  request data straight to the `ResponseWriter` (XSS) — plus the regex
+  layer's own `fmt.Sprintf`-based SQL/SSTI/SSRF/mass-assignment/
+  insecure-randomness checks, which still run alongside it
 - Ruby/Rails: string-interpolated `where()`/`find_by_sql()`, backtick/
   `system()`/`IO.popen` command interpolation, `Marshal.load`/`YAML.load`
   deserialization, `params.permit!` mass assignment, `render inline:
@@ -487,7 +508,7 @@ on the normal `python3` interpreter's path, is the reliable way to run it.
   (both engines share these maps) if it's a new vuln name. A new *source*
   (beyond `request.args/form/json/files`-style superglobal access) goes in
   `SOURCE_TEXT_RE`.
-- New taint sink, Go/Java/Ruby/Lua/Rust (legacy regex engine) → add an entry
+- New taint sink, Java/Ruby/Lua/Rust (legacy regex engine) → add an entry
   to `SINKS` in `taint.py` (and the matching maps as above).
 - Porting a legacy-engine language to the AST engine → tree-sitter has a
   grammar package for most mainstream languages (`tree-sitter-go`,
@@ -516,8 +537,8 @@ on the normal `python3` interpreter's path, is the reliable way to run it.
 ## Roadmap ideas
 
 - ~~AST-based matching per language instead of regex~~ — done for Python/JS/
-  PHP in v1.0.0 (see "Architecture"); Go/Java/Ruby/Lua/Rust still need
-  porting (see "Extending it").
+  PHP in v1.0.0, Go in v1.1.0 (see "Architecture"); Java/Ruby/Lua/Rust still
+  need porting (see "Extending it").
 - Full interprocedural taint tracking (currently one hop only — a helper
   function's own parameters get seeded from its call sites, but taint
   doesn't propagate further than that, and each *file* is still analyzed

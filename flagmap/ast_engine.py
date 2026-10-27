@@ -23,9 +23,9 @@ This module matches over the actual parse tree instead:
     which field of the call node we look at — SINKS below has one table
     instead of taint.py's separate SINKS/METHOD_SINKS mechanism.
 
-Go/Java/Ruby/Lua/Rust are NOT covered here — they still go through the
+Java/Ruby/Lua/Rust are NOT covered here yet — they still go through the
 legacy regex engine in scanner.py/patterns.py/taint.py (see README for why,
-and for the porting plan).
+and for the porting plan this module's Go support just followed).
 """
 
 import re
@@ -42,6 +42,13 @@ try:
 except ImportError:
     _TREE_SITTER_AVAILABLE = False
 
+try:
+    import tree_sitter_go as _ts_go
+
+    _TREE_SITTER_GO_AVAILABLE = True
+except ImportError:
+    _TREE_SITTER_GO_AVAILABLE = False
+
 from .taint import SEVERITY_BY_VULN, WHY_BY_VULN, PAYLOAD_BY_VULN
 
 
@@ -54,6 +61,8 @@ if _TREE_SITTER_AVAILABLE:
     _PARSERS["python"] = _make_parser(_ts_python.language())
     _PARSERS["js"] = _make_parser(_ts_javascript.language())
     _PARSERS["php"] = _make_parser(_ts_php.language_php())
+if _TREE_SITTER_GO_AVAILABLE:
+    _PARSERS["go"] = _make_parser(_ts_go.language())
 
 AST_SUPPORTED_LANGUAGES = set(_PARSERS.keys())
 
@@ -80,24 +89,37 @@ SCOPE_NODE_TYPES = {
     "python": {"function_definition"},
     "js": {"function_declaration", "function_expression", "arrow_function", "method_definition"},
     "php": {"function_definition", "method_declaration"},
+    # func_literal: Go's extremely common inline-handler idiom —
+    # `http.HandleFunc("/x", func(w http.ResponseWriter, r *http.Request) {
+    # ... })` — needs its own scope just like a named function, even though
+    # it has no name (so it never gets one-hop interprocedural seeding,
+    # which is fine: nothing calls an anonymous func by name anyway).
+    "go": {"function_declaration", "method_declaration", "func_literal"},
 }
 
 CALL_NODE_TYPES = {
     "python": {"call"},
     "js": {"call_expression"},
     "php": {"function_call_expression", "member_call_expression"},
+    "go": {"call_expression"},
 }
 
 ASSIGN_NODE_TYPES = {
     "python": {"assignment", "augmented_assignment"},
     "js": {"assignment_expression", "variable_declarator"},
     "php": {"assignment_expression"},
+    # Go has no single "assignment" node whose left/right are bare
+    # expressions — short_var_declaration (`:=`) and assignment_statement
+    # (`=`) both wrap their sides in an expression_list (to support multi-
+    # value assignment), handled specially in _assign_lhs_rhs below.
+    "go": {"short_var_declaration", "assignment_statement"},
 }
 
 IDENTIFIER_NODE_TYPE = {
     "python": "identifier",
     "js": "identifier",
     "php": "variable_name",
+    "go": "identifier",
 }
 
 # A short regex checked only against the exact text of one already-AST
@@ -108,12 +130,22 @@ SOURCE_TEXT_RE = {
     "python": re.compile(r"""\brequest\.(?:args|form|values|json|files)\b"""),
     "js": re.compile(r"""\breq\.(?:query|params|body)\b"""),
     "php": re.compile(r"""\$_(?:GET|POST|REQUEST|COOKIE)\b"""),
+    # net/http's Request methods, plus gorilla/mux and go-chi's router
+    # param accessors — the three ways a Go CTF handler usually reads
+    # attacker-controlled data. Deliberately NOT matching bare `r.URL` or
+    # `r.Header` alone (too broad, matches tons of safe introspection) —
+    # only the specific value-returning accessors.
+    "go": re.compile(
+        r"""\br\.(?:FormValue|PostFormValue|URL\.Query|URL\.Path|Header\.Get|Cookie)\b"""
+        r"""|\bmux\.Vars\b|\bchi\.URLParam\b"""
+    ),
 }
 
 SOURCE_CANDIDATE_NODE_TYPES = {
     "python": {"call", "subscript", "attribute"},
     "js": {"member_expression", "subscript_expression"},
     "php": {"subscript_expression", "variable_name"},
+    "go": {"call_expression", "selector_expression", "index_expression"},
 }
 
 # FastAPI/Flask-style: a route handler's own parameters are just as
@@ -171,6 +203,33 @@ SINKS = {
         "fopen": ("Path Traversal / LFI", "arg0", "tainted"),
         "unserialize": ("Unsafe Deserialization", "arg0", "tainted"),
         "eval": ("Command Injection / RCE", "arg0", "tainted"),
+    },
+    "go": {
+        # database/sql (and compatible drivers): Query/QueryRow/Exec all
+        # take the SQL string as their first argument.
+        "Query": ("SQL Injection", "arg0", "tainted"),
+        "QueryRow": ("SQL Injection", "arg0", "tainted"),
+        "Exec": ("SQL Injection", "arg0", "tainted"),
+        # os/exec: exec.Command(name, arg...) — name is arg0.
+        "Command": ("Command Injection", "arg0", "tainted"),
+        # os/ioutil: path is arg0.
+        "Open": ("Path Traversal / LFI", "arg0", "tainted"),
+        "ReadFile": ("Path Traversal / LFI", "arg0", "tainted"),
+        "Create": ("Path Traversal / LFI", "arg0", "tainted"),
+        # net/http: ServeFile(w, r, name) — the path is the 3rd positional
+        # argument (index 2), not arg0.
+        "ServeFile": ("Path Traversal / LFI", "arg2", "tainted"),
+        # net/http: Redirect(w, r, url, code) — same shape, url is index 2.
+        "Redirect": ("Open Redirect", "arg2", "tainted"),
+        # fmt.Fprintf(w, tainted)/fmt.Fprint(w, tainted): writing request
+        # data straight to an http.ResponseWriter with no html/template
+        # escaping — the Go equivalent of PHP's bare `echo $_GET[...]`.
+        # Deliberately NOT "Write" (bytes.Buffer.Write, file.Write,
+        # hash.Write, ... — far too generic a method name to key a sink on
+        # without naming false positives on every unrelated byte-slice
+        # write in the codebase).
+        "Fprintf": ("Cross-Site Scripting (XSS)", "arg1", "tainted"),
+        "Fprint": ("Cross-Site Scripting (XSS)", "arg1", "tainted"),
     },
 }
 
@@ -277,6 +336,31 @@ def _assign_lhs_rhs(node, language):
         return node.child_by_field_name("left"), node.child_by_field_name("right")
     if language == "php":
         return node.child_by_field_name("left"), node.child_by_field_name("right")
+    if language == "go":
+        # Go's `:=`/`=` always wrap both sides in an expression_list, to
+        # support multi-value assignment (`a, b := f()`, `a, b = b, a`).
+        # Only a clean single-name<-single-expression pairing gets taint
+        # PROPAGATED to a name (anything else — multi-target, multi-value
+        # swaps — is too ambiguous to pair up correctly, so lhs comes back
+        # None and no variable gets tainted). But a single right-hand
+        # expression (even with 2+ names on the left, e.g. the extremely
+        # common `rows, err := db.Query(sql)`) is still returned as rhs so
+        # the caller's _walk still recurses into it and catches `db.Query`
+        # itself as a sink — losing that would silently blind the engine
+        # to every Go DB call written the idiomatic (err-returning) way.
+        if t in ("short_var_declaration", "assignment_statement"):
+            left_list = node.child_by_field_name("left")
+            right_list = node.child_by_field_name("right")
+            if left_list is None or right_list is None:
+                return None, None
+            right_children = right_list.named_children
+            if len(right_children) != 1:
+                return None, None  # multi-value RHS (rare, e.g. `a, b := f(), g()`)
+            rhs = right_children[0]
+            left_children = left_list.named_children
+            lhs = left_children[0] if len(left_children) == 1 else None
+            return lhs, rhs
+        return None, None
     return None, None
 
 
@@ -324,6 +408,25 @@ def _call_info(node, language):
             if name_node is None:
                 return None
             return _text(name_node), True, node.child_by_field_name("object"), args
+        return None
+    if language == "go":
+        fn = node.child_by_field_name("function")
+        args = node.child_by_field_name("arguments")
+        if fn is None:
+            return None
+        if fn.type == "selector_expression":
+            # `db.Query(...)`, `exec.Command(...)`, `r.URL.Query().Get(...)`
+            # — the field name is the callee, the operand is the receiver
+            # (package qualifier OR a real receiver like `db`/`r`; SINKS'
+            # go table only keys on arg-slot sinks today, so the receiver
+            # distinction doesn't matter yet, but is threaded through for
+            # consistency with the other languages / future receiver sinks).
+            field = fn.child_by_field_name("field")
+            if field is None:
+                return None
+            return _text(field), True, fn.child_by_field_name("operand"), args
+        if fn.type == "identifier":
+            return _text(fn), False, None, args
         return None
     return None
 
@@ -459,6 +562,19 @@ def _param_names(func_node, language) -> List[Optional[str]]:
         elif language == "php":
             if p.type == "simple_parameter":
                 vn = p.child_by_field_name("name")
+                names.append(_text(vn) if vn else None)
+            else:
+                names.append(None)
+        elif language == "go":
+            if p.type == "parameter_declaration":
+                vn = p.child_by_field_name("name")
+                # Go allows a grouped declaration (`func f(a, b string)`),
+                # which the grammar represents as ONE parameter_declaration
+                # with the "name" field only giving the first identifier —
+                # that shared-type shorthand is rare enough in CTF handler
+                # signatures (vs. the one-name-per-param net/http style) that
+                # losing the second name here is an acceptable, documented
+                # gap rather than something worth a bespoke multi-name path.
                 names.append(_text(vn) if vn else None)
             else:
                 names.append(None)
