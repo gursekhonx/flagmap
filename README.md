@@ -11,7 +11,7 @@ Built for jeopardy-style CTFs (like CyberSci regionals) where web challenges
 sometimes hand you the source code. Instead of eyeballing every file, point
 flagmap at the folder and get a triaged list of what's worth trying first.
 
-## Architecture (v1.5.0)
+## Architecture (v1.6.0)
 
 **All eight supported languages are matched structurally**, via
 [`tree-sitter`](https://tree-sitter.github.io/tree-sitter/) parse trees
@@ -214,6 +214,14 @@ Ruby/Rails, Lua, Rust):
   secrets)
 - Missing CSRF Protection (best-effort: a POST form with no CSRF token
   anywhere in the file)
+- Missing Authorization / IDOR (best-effort, added v1.6.0, Python/JS/PHP/
+  Go/Java/Ruby: an id read straight from the request/route — either an
+  explicit extraction call or the route's own id-named parameter — handed
+  to a lookup/update/delete call, with no ownership check anywhere in the
+  function or the decorator/annotation above it. A bare login-required
+  check does NOT count as that ownership check — see "Best-effort
+  heuristics" for exactly what does and the real false-positive/negative
+  tradeoffs of a check this coarse)
 - GraphQL / Query Injection (a query/mutation document built with `%`
   formatting or template-literal interpolation instead of GraphQL variables)
 - LDAP Injection (AST-matched since v1.4.0, Python/PHP/Java): a search
@@ -229,7 +237,7 @@ Ruby/Rails, Lua, Rust):
   catch" — forcing a match there would mean reaching into an object
   literal's keys, a different and much more false-positive-prone kind of
   check than anything else in `SINKS`.
-- SSRF (AST-matched since v1.4.0, in addition to the existing regex
+- SSRF (AST-matched since v1.5.0, in addition to the existing regex
   coverage, Python/PHP/JS): `urlopen()` (Python), `file_get_contents()`
   (PHP), `fetch()` (JS) with a URL built from request data *anywhere
   upstream in the function or one hop away in a helper* — e.g. `urlopen("http://" +
@@ -272,7 +280,7 @@ Ruby/Rails, Lua, Rust):
   with no signature/secret — trivially forgeable for any account
 - JWT `verify_signature` explicitly set to anything other than a literal
   `True` (commonly a variable that can resolve to `None`/`False`)
-- Java (AST-matched since v1.1.0, see "Architecture"): `executeQuery`/
+- Java (AST-matched since v1.2.0, see "Architecture"): `executeQuery`/
   `executeUpdate`/`execute` with a SQL string built from
   `request.getParameter`/`getParameterValues`/`getHeader`/`getQueryString`
   *anywhere upstream in the method* (not just a same-line concatenation),
@@ -292,7 +300,7 @@ Ruby/Rails, Lua, Rust):
   request data straight to the `ResponseWriter` (XSS) — plus the regex
   layer's own `fmt.Sprintf`-based SQL/SSTI/SSRF/mass-assignment/
   insecure-randomness checks, which still run alongside it
-- Ruby/Rails (AST-matched since v1.1.0, see "Architecture"): `execute`/
+- Ruby/Rails (AST-matched since v1.2.0, see "Architecture"): `execute`/
   `exec_query` with a SQL string built from `params[...]`/`request.params`/
   `cookies[...]`/`request.headers` *anywhere upstream in the method*,
   `system`/`IO.popen` with a tainted command, `File.open` with a tainted
@@ -503,20 +511,106 @@ a type cast, or a default fallback (`request.args.get('q', '') or 'x'`), and
 an over-anchored regex misses taint entirely the moment it's not the very
 first thing on the line.
 
+## Best-effort heuristics
+
+Two checks in flagmap are deliberately a third, looser category than
+everything above: not "a dangerous call exists" (direct patterns) and not
+"a tainted value reaches a dangerous call" (taint-lite/AST), but "a check
+that *should* be here doesn't seem to be anywhere in this file/function."
+Proving a negative like that from source text alone is, honestly, not
+fully solvable — see "What it can't catch" for why absence-of-a-check bugs
+are flagmap's hardest category in general. These two exist anyway because
+the alternative (refusing to try at all) throws away a signal that's
+genuinely useful often enough to be worth a "possible"-confidence flag,
+as long as it's never oversold as more than that.
+
+- **Missing CSRF Protection** (`csrf.py`) — the original of the two: a
+  `<form method="post">` with no mention of "csrf" anywhere in the same
+  file. Deliberately whole-file, not per-form: no cross-file/template-
+  include awareness, no JS-based CSRF header checks. Catches the "plain
+  HTML form, no token field, no middleware" shape that's extremely common
+  in intentionally-vulnerable CTF apps; misses anything where the token
+  lives in a layout/include the scanner isn't looking at, and can false-
+  positive on a file that has CSRF protection phrased in a way that never
+  spells out the literal substring "csrf".
+- **Missing Authorization / IDOR** (`idor.py`, added v1.6.0) — the newer
+  and considerably more involved of the two. For each function in an
+  AST-supported language (Python/JS/PHP/Go/Java/Ruby — Lua/Rust skipped,
+  same "rare fit" reasoning their `SINKS` tables already use), it checks
+  three things: (1) does this function read an id-like value from the
+  request/route — either an explicit extraction call (`request.args.get`,
+  `req.params.id`, `$_GET['id']`, `params[:id]`, Go's
+  `r.URL.Query().Get`/`mux.Vars`/`chi.URLParam`, Java's `getParameter`) or
+  the function's *own parameter* literally being named `id`/`user_id`/
+  `order_id`/etc. (the equally-common Flask/Express/Laravel/Rails
+  route-path-binding idiom, where there's no extraction call at all —
+  `@app.route("/orders/<int:order_id>") def view(order_id): ...`); (2)
+  does it hand that value to something lookup/mutation-shaped (`find`,
+  `findById`, `where`, `filter_by`, `update`, `delete`, `destroy`, ...);
+  and (3) is there no sign, anywhere in the function OR up to 5 lines
+  above it (to catch a decorator/annotation sitting directly on top), of
+  an *ownership* check. That third part is the one worth being precise
+  about: it deliberately does **not** treat a bare authentication check
+  (`@login_required`, `@jwt_required`, "isAuthenticated") as a mitigating
+  signal, on purpose — that proves the request comes from *some*
+  logged-in user, not that it's the *right* user for *this* resource,
+  and treating it as sufficient would make the check fire on approximately
+  nothing, including the exact "logged in as anyone, no ownership check,
+  can touch anyone's record" shape that IS the textbook CTF IDOR bug. It
+  *does* recognize an ownership check folded directly into the lookup
+  itself (`filter_by(id=order_id, user_id=current_user.id)`,
+  `where(id: order_id, user_id: current_user.id)`) — current_user/owner_id/
+  user_id-style keywords inside the SAME call that does the lookup still
+  count — as well as a separate explicit compare afterward, a
+  policy/authorize call (Pundit's `policy(...)`, Rails' `authorize!`,
+  CanCan's `can?`), Laravel's `Auth::id()`, and Spring's `@PreAuthorize`
+  (which also reasonably suppresses a genuinely admin-only route, where a
+  per-user ownership concept doesn't apply in the first place). Function
+  boundaries are found precisely by reusing `ast_engine.py`'s existing
+  tree-sitter parse + `SCOPE_NODE_TYPES` table rather than a second,
+  worse regex-based brace/indentation counter — everything *inside* that
+  boundary is still plain regex over the function's own text, deliberately,
+  in the same "textual signal, not real data-flow" spirit as the CSRF
+  check. Known blind spots, stated as plainly as everything in "What it
+  can't catch": ownership enforced at the database layer (row-security,
+  tenant-scoped connections) is invisible to a source-text check by
+  construction; ownership checked in a *different* function this one
+  calls is invisible too (no interprocedural reasoning here — not even
+  the one-hop seeding the real taint engine does); a genuinely
+  no-ownership-concept route (a health check with an unrelated `id` query
+  param) can still false-positive, because nothing here understands what
+  a resource is *for*; and any ownership check phrased in a way the
+  keyword list above doesn't recognize is a false negative. If this
+  flags something, the right response is to read the function, not to
+  trust the label — exactly the same advice "What it can't catch" gives
+  for every category it refuses to even attempt.
+
 ## What it can't catch (on purpose)
 
 A few recurring bug shapes get found in testing over and over, confirmed as
 real, and then deliberately **not** turned into a pattern, because forcing
 one would either be a no-op or a false-positive generator:
 
-- **Missing authorization / IDOR** — a route that reads an id from the
-  request with no check that the current user actually owns that id. This
-  is an *absence* of a check, not a syntax shape; a regex can't tell "no
-  comparison to the current user anywhere in this function" from "there's
-  a comparison, it's just not visible on this line."
+- **Missing authorization / IDOR, precisely** — a route that reads an id
+  from the request with no check that the current user actually owns that
+  id. This is an *absence* of a check, not a syntax shape; a regex can't
+  tell "no comparison to the current user anywhere in this function" from
+  "there's a comparison, it's just not visible on this line." As of
+  v1.6.0 there IS a best-effort heuristic for exactly this shape
+  (`idor.py`, "Missing Authorization / IDOR" in "What it catches") — it
+  does not solve the underlying problem stated above, which is still true;
+  it just accepts the same trade the pre-existing CSRF check already made
+  for a different absence-of-a-check bug (see "Best-effort heuristics")
+  rather than refusing to try at all. Treat every finding from it as "a
+  human skim would flag this too, go look", never as "confirmed."
 - **LLM-tool functions with no enforced access control** — the same
   absence-of-a-check problem, specific to `@tool`-decorated functions whose
-  only access control is prose in a system prompt.
+  only access control is prose in a system prompt. Not covered by the IDOR
+  heuristic above: that one looks for a *missing comparison to the current
+  user*, which presupposes a conventional request/response web route in
+  the first place — an LLM tool function's "access control" is prose in a
+  system prompt the scanner never sees, so there's no code-level absence to
+  even point at.
 - **Known-CVE'd pinned dependencies/base images** (e.g. `FROM traefik:v3.4.5`
   shipping a public dashboard path-traversal CVE) — the vulnerable code
   isn't in the challenge's own source at all, so no amount of pattern
@@ -597,6 +691,7 @@ flagmap/
     taint.py              # severity/why/payload maps (shared by both engines) + legacy regex taint-lite, now fallback-only (py/js/php)
     heredoc.py             # pulls source embedded in Dockerfile heredocs back out for scanning
     csrf.py                 # best-effort missing-CSRF form check
+    idor.py                # best-effort missing-authorization/IDOR check (see "Best-effort heuristics")
     chains.py              # attack-path correlation over a scan's findings
     config_patterns.py    # the misconfiguration pattern database
     config_scanner.py      # file walking + checks (Dockerfile/nginx/.env/etc.)
@@ -697,17 +792,34 @@ on the normal `python3` interpreter's path, is the reliable way to run it.
   "Architecture" and "What it catches"); Node/Ruby intentionally skipped,
   their LDAP libraries put the filter inside an options/hash argument
   rather than a plain positional string.
-- ~~SSRF~~ — added real AST taint-tracking in v1.4.0 for Python
+- ~~SSRF~~ — added real AST taint-tracking in v1.5.0 for Python
   (`urlopen`)/PHP (`file_get_contents`)/JS (`fetch`) — see "What it
   catches"; `requests.get/post`/`axios.get/post`/`http(s).get` were
   deliberately left to the regex layer (too generic a name to add
   safely — see "What it catches" for why).
-- More vuln classes that are currently regex-only for most/all languages
-  could get the same treatment: SSTI beyond Python's
-  `render_template_string` (EJS/Handlebars/Nunjucks), XXE
-  (DOMDocument/lxml parser config), and NoSQL Injection (MongoDB
-  `find()`/`update()` with a raw request-body filter) are the next most
-  CTF-common candidates.
+- ~~Missing Authorization / IDOR~~ — added as a best-effort heuristic in
+  v1.6.0 for Python/JS/PHP/Go/Java/Ruby (see "Best-effort heuristics" and
+  "What it catches"). This does not mean the underlying problem is
+  "solved" — the "What it can't catch" entry for this is still accurate
+  about the fundamental limit, the heuristic just accepts the same
+  coarse, low-confidence trade the CSRF check already made rather than
+  refusing to try.
+- Looked at SSTI beyond Python's `render_template_string` (EJS/
+  Handlebars/Nunjucks), XXE (DOMDocument/lxml parser config), and NoSQL
+  Injection (MongoDB `find()`/`update()`/Mongoose) for the same AST
+  taint-tracking treatment SQLi/SSRF/LDAP got, and deliberately held off
+  on all three for now: EJS's `render`/`compile` and Handlebars' `compile`
+  either reuse Express's own extremely common `res.render(viewName, data)`
+  method name (a much higher-traffic collision than anything accepted
+  elsewhere in `SINKS`) or need a two-call correlation (`compile()` then
+  invoking its return value) `SINKS`'s one-call-one-sink model doesn't
+  fit; MongoDB/Mongoose's `find`/`findOne`/`update` are even more generic
+  than `get`/`post` were for SSRF (collides with `Array.prototype.find`,
+  any custom repository class, jQuery-ish `.find()`) and NoSQL Injection
+  already has narrower, safer regex coverage (README: "the *whole* filter
+  taken from the request body") that a blanket AST sink would mostly
+  just duplicate at higher false-positive risk. Still open if a cleaner,
+  less collision-prone angle turns up.
 - Full interprocedural taint tracking (currently one hop only — a helper
   function's own parameters get seeded from its call sites, but taint
   doesn't propagate further than that, and each *file* is still analyzed

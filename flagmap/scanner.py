@@ -9,6 +9,7 @@ from typing import List, Optional
 from .patterns import compiled_patterns, EXTENSION_LANGUAGE, SKIP_DIRS, NOISY_IN_TEST_FILES
 from .taint import find_tainted_sinks, find_format_string_sinks
 from .csrf import find_missing_csrf
+from .idor import find_idor_candidates, IDOR_LANGUAGES
 from .config_scanner import scan_config_path
 from .heredoc import iter_heredoc_sources
 from .ast_engine import scan_ast, AST_SUPPORTED_LANGUAGES
@@ -128,12 +129,17 @@ def scan_lines(path: str, language: str, lines: List[str], patterns: list) -> Li
 
     seen = {(f.line_no, f.vuln_name) for f in findings}
 
+    # Computed unconditionally (cheap) — both the AST taint-flow pass below
+    # and the best-effort IDOR heuristic further down need the raw bytes,
+    # and the IDOR check runs on a strict subset of AST_SUPPORTED_LANGUAGES
+    # but isn't itself gated on that set (see idor.py).
+    source_bytes = "".join(lines).encode("utf-8", errors="ignore")
+
     if language in AST_SUPPORTED_LANGUAGES:
         # Structural taint-flow pass: parses the actual syntax tree instead
         # of matching text, so it doesn't share the regex engine's recurring
         # failure modes (quote-conflict misses, backtracking, multi-line
         # misses, scope/receiver confusion) — see ast_engine.py's docstring.
-        source_bytes = "".join(lines).encode("utf-8", errors="ignore")
         for af in scan_ast(path, language, source_bytes):
             key = (af.line_no, af.vuln_name)
             if key in seen:
@@ -203,6 +209,35 @@ def scan_lines(path: str, language: str, lines: List[str], patterns: list) -> Li
             payload="Host an auto-submitting form on another origin targeting this endpoint while the victim is logged in.",
             confidence="possible",
         ))
+
+    # best-effort Missing Authorization / IDOR check: a function that pulls
+    # an id straight from the request and hands it to a lookup/mutation
+    # call, with no textual sign of an ownership check nearby. Deliberately
+    # the loosest-confidence check in the whole tool — see idor.py's module
+    # docstring for exactly what it does and doesn't try to prove.
+    if language in IDOR_LANGUAGES:
+        for inf in find_idor_candidates(path, language, source_bytes, lines):
+            key = (inf.line_no, "Missing Authorization / IDOR")
+            if key in seen:
+                continue
+            seen.add(key)
+            findings.append(Finding(
+                file=inf.file,
+                line_no=inf.line_no,
+                line_text=inf.line_text,
+                vuln_name="Missing Authorization / IDOR",
+                severity="medium",
+                why="This function reads an id-like value straight from the request/route and passes it to a "
+                    "lookup/update/delete call, but there's no sign anywhere in the function (or the "
+                    "decorator/annotation directly above it) of a check that the current user actually owns "
+                    "this specific resource — only that the resource with this id exists. A generic "
+                    "login-required check doesn't count: that proves the request comes from *some* logged-in "
+                    "user, not that it's the *right* user for this id.",
+                payload="Log in as one low-privilege user, then request this endpoint with another user's id "
+                        "(try adjacent/sequential values if ids look numeric) and see if it returns or modifies "
+                        "their data.",
+                confidence="possible",
+            ))
 
     return findings
 

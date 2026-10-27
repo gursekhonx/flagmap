@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="flagmap",
-    version="1.5.0",
+    version="1.6.0",
     description="Scan CTF challenge source code for common web-exploitation vuln patterns, with suggested payloads.",
     packages=find_packages(),
     python_requires=">=3.8",
