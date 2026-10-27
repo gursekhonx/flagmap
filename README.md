@@ -1,0 +1,503 @@
+# flagmap
+
+A CLI tool that scans CTF challenge source code (PHP, Python, Node/JS, C#/
+ASP.NET Core, Java, Go, Ruby, Lua, Rust) and flags common web-exploitation
+vulnerability patterns — with a short explanation and a suggested starting
+payload for each one. It also correlates findings into likely **attack
+chains** (e.g. an upload bug plus an Apache misconfig = RCE) and ranks a
+**"Start Here"** shortlist so you know what to try first.
+
+Built for jeopardy-style CTFs (like CyberSci regionals) where web challenges
+sometimes hand you the source code. Instead of eyeballing every file, point
+flagmap at the folder and get a triaged list of what's worth trying first.
+
+## Architecture (v1.0.0)
+
+**Python, JavaScript and PHP are matched structurally**, via
+[`tree-sitter`](https://tree-sitter.github.io/tree-sitter/) parse trees
+(`flagmap/ast_engine.py`), not regex. Earlier versions matched everything
+with regex, and a recurring category of bug kept coming back during testing
+against real CTF repos: a quote inside a string literal breaking a
+quote-excluding character class, catastrophic backtracking on a huge
+minified line, a construction spread across multiple lines, a variable name
+coincidentally matching an unrelated token (an f-string prefix, a method
+name on an unrelated object). None of those were missing vulnerability
+*knowledge* — they were regex losing to the fact that source code is a
+tree, not a sequence of lines. Matching the actual parse tree instead:
+
+- is invariant to quote style, nesting, whitespace, and line breaks — a
+  tainted f-string/template-literal/encapsed-string is recognized by its
+  AST shape (an `interpolation`/`template_substitution`/embedded
+  `variable_name` node), not by a regex trying to not-match the wrong quote
+  character;
+- scopes taint tracking per function instead of "same file, textual
+  proximity" — a variable in one function can no longer be confused with a
+  same-named variable in another;
+- does one hop of interprocedural taint tracking — if a route handler reads
+  request data and hands it to a plain helper function, the helper's own
+  parameter is seeded as tainted for that one call, so the bug doesn't go
+  unnoticed just because it lives one function away from the request read;
+- treats "is the tainted variable the call's receiver or its argument" as
+  just a different field of the same call node, instead of needing two
+  separate detection mechanisms for the two shapes.
+
+**Go, Java, Ruby, Lua and Rust still go through the legacy regex engine**
+(`flagmap/patterns.py` + `flagmap/taint.py`) — they haven't been ported to
+tree-sitter yet. Porting them is mechanical (the same per-language
+config tables in `ast_engine.py`, extended with that language's grammar and
+node-field names) but hasn't been done. Contributions welcome.
+
+**Misconfiguration scanning (`config_scanner.py`) stays regex-based for
+every file type**, deliberately — Dockerfiles, `nginx.conf`, `.env`, and
+similar config formats are simple key/value or directive-per-line formats
+with none of the nesting/quoting complexity that broke regex for *code*, so
+there was no real problem there to fix.
+
+If `tree-sitter` and its per-language grammar packages aren't installed,
+flagmap still works — it quietly falls back to the regex engine for
+Python/JS/PHP too (the same behavior as pre-1.0 versions) rather than
+erroring out. Install the grammars to get the structural engine's accuracy
+improvements: `pip install tree-sitter tree-sitter-python
+tree-sitter-javascript tree-sitter-php` (also listed in `setup.py`'s
+`install_requires`).
+
+## What it catches
+
+**Code vulnerabilities** (PHP, Python, Node/JS, C#/ASP.NET Core, Java, Go,
+Ruby/Rails, Lua, Rust):
+
+- SQL Injection (string-built queries, including a simple "variable assigned
+  from user input, used a few lines later" taint check)
+- Command Injection / RCE (`system`, `exec`, `eval`, `shell_exec`, etc.)
+- Unsafe Deserialization (`pickle.loads`, PHP `unserialize`, `yaml.load`,
+  `node-serialize`)
+- Path Traversal / LFI (`include`, `fopen`, `open`, `send_file`,
+  `readFileSync`, etc. fed from user input)
+- Server-Side Template Injection / SSTI (`render_template_string`, EJS,
+  Handlebars, Nunjucks)
+- SSRF (`requests`/`urlopen`/`pycurl` in Python, `axios`/`fetch`/`http.get` in
+  Node, `curl_setopt`/`file_get_contents` in PHP, fed from request data)
+- Unrestricted File Upload (`move_uploaded_file`, Flask `.save()`, `multer()`
+  with no extension/type allowlist)
+- Cross-Site Scripting / XSS (reflected `echo`/`print` in PHP, unescaped
+  template returns in Flask, `.innerHTML =`/`res.send()` in JS)
+- XXE (DOMDocument/simplexml in PHP, lxml/xmltodict in Python)
+- Open Redirect (`header("Location: ".$_GET...)`, Flask `redirect()`, Express
+  `res.redirect()` from request data)
+- NoSQL Injection (MongoDB `find()`/`update()` with the whole filter taken
+  from the request body)
+- Mass Assignment (`**request.json` into a constructor, `findByIdAndUpdate`
+  with the raw request body)
+- Prototype Pollution (`_.merge`/`deepmerge` into `{}` from request data)
+- JWT / Auth Token Weaknesses (`verify=False`, `alg: none` accepted, missing
+  algorithm allowlist)
+- Weak Cryptography (MD5/SHA1 for password hashing, AES/DES in ECB mode)
+- Insecure Randomness (`random`/`Math.random()`/`rand()` used for
+  tokens/passwords/OTPs instead of a CSPRNG)
+- CORS Misconfiguration (reflected/wildcard origin, especially with
+  credentials enabled)
+- Host Header Injection (`$_SERVER['HTTP_HOST']`, `request.host`,
+  `req.headers.host` used to build URLs)
+- Debug Mode Enabled (Flask `debug=True`, Django `DEBUG=True`, forced
+  `display_errors`)
+- Weak Auth Logic (PHP loose `==` type juggling, `strcmp` bypass, hardcoded
+  secrets)
+- Missing CSRF Protection (best-effort: a POST form with no CSRF token
+  anywhere in the file)
+- GraphQL / Query Injection (a query/mutation document built with `%`
+  formatting or template-literal interpolation instead of GraphQL variables)
+- Sensitive Data Exposure in Logs (passwords/secrets/tokens/hashes passed to
+  `logger.debug`/`console.log`/`error_log` — common with structured loggers
+  whose output ends up in a dashboard or log aggregator)
+- Multi-line-aware SQL Injection: an f-string/template-literal/C#
+  interpolated string with real SQL structure (`SELECT...FROM`,
+  `INSERT...INTO`, etc.) and an interpolated variable is flagged at its
+  *construction* site, even when it's assigned to a variable and executed
+  several lines later — not just when the query is built inline inside the
+  `execute()`/`query()` call itself
+- C#-specific: JWT signature bypass (`ReadJwtToken()` instead of
+  `ValidateToken()`, disabled signature validation), EF Core/ADO.NET raw SQL
+  via interpolated strings, `BinaryFormatter`/`TypeNameHandling.All`
+  deserialization RCE, `Html.Raw()` XSS, `Process.Start` command injection
+- Stored/second-order XSS: a bare `echo $row['field'];` of a DB-stored value
+  with no `htmlspecialchars()`/`h()` wrapper (the taint-lite layer only
+  tracks superglobals, so this catches the shape it structurally can't)
+- `addslashes()` misused as an XSS defense near request data (it only
+  escapes quotes/backslashes — it does not stop a `</script>` tag breakout)
+- Path Traversal / Zip Slip (`zipfile`/`tarfile` `.extract()`/`.extractall()`
+  calls, which are unsafe unless member names are validated first)
+- Insecure session tokens built from a plain `base64.b64encode(username)`
+  with no signature/secret — trivially forgeable for any account
+- JWT `verify_signature` explicitly set to anything other than a literal
+  `True` (commonly a variable that can resolve to `None`/`False`)
+- Java: unsafe deserialization (`readObject()` — ysoserial gadget-chain
+  territory), string-concatenated `executeQuery`/`executeUpdate`, 
+  `Runtime.exec()`/`ProcessBuilder` command injection, request-driven
+  `File`/`URL` construction (LFI/SSRF), a defaults-only
+  `DocumentBuilderFactory` (XXE), `MessageDigest.getInstance("MD5"/"SHA-1")`,
+  `java.util.Random` used for tokens
+- Go: `exec.Command()` fed from the request or a bare variable, SQL built
+  with `fmt.Sprintf` (including at its construction site, before it's passed
+  to `db.Query()` elsewhere), `html/template`/`text/template` parsed from
+  request data (SSTI), request-driven file reads, `math/rand` used for
+  tokens
+- Ruby/Rails: string-interpolated `where()`/`find_by_sql()`, backtick/
+  `system()`/`IO.popen` command interpolation, `Marshal.load`/`YAML.load`
+  deserialization, `params.permit!` mass assignment, `render inline:
+  params` SSTI, request-driven `File` reads
+- Lua: string-concatenated (`..`) SQL and `os.execute()`, `loadstring()`/
+  `load()` on non-literal input (direct RCE)
+- Rust (intentionally light coverage — Rust's safety guarantees remove most
+  of what flagmap targets): bare-variable `Command::new()`, `format!`-built
+  SQL, bare-variable filesystem calls, presence of an `unsafe` block as a
+  manual-review flag
+- EJS `<%- %>` and Handlebars `{{{ }}}` — the raw/unescaped-output tags of
+  their respective template engines (the escaped forms are `<%=` / `{{ }}`)
+- A hand-rolled recursive merge utility with no guard of its own (`key in
+  target` walking the prototype chain) — Prototype Pollution that survives
+  even when an upstream parser blocklists `__proto__`/`constructor`
+- Puppeteer/Playwright `page.goto()` fed a bare variable — SSRF via an
+  admin/review bot visiting an attacker-chosen URL, a different API shape
+  than HTTP-client SSRF (axios/requests/curl)
+- A stored value pulled out of a collection by index and written straight
+  into the response (`res.end(items[i])`) — stored XSS/CSS-injection that
+  taint-lite can't see because the source is a prior storage write, not a
+  superglobal
+- Go: a raw `map[string]string`/`map[string]interface{}` request-handler
+  declaration instead of a typed struct — Go's shape of Mass Assignment if
+  that map is later re-marshaled into a downstream API call unfiltered
+- Ruby `.constantize` on a hash/params-indexed string — unsafe dynamic class
+  instantiation that can load *any* class currently in memory (a well-known
+  Rails RCE/SSRF/file-read gadget chain) with attacker-supplied constructor
+  arguments
+- Go SSRF-via-reverse-proxy (`http.NewRequest(req.Method, url, ...)` built
+  from the inbound request and a dynamically-constructed target) and
+  bare-variable `uint8/16/32(...)` narrowing casts (Integer
+  Overflow/Truncation — silently wraps a value that exceeded the smaller
+  type's range, desyncing a length-prefixed format or size check)
+- PHP `define('...SECRET...'/'...PASSWORD...'/'...KEY...', 'literal')` —
+  the `define()`-constant idiom for the same hardcoded-secret problem as a
+  `$var = "value"` assignment
+- A narrow JSP `<%= request.getParameter(...) %>` / `<%= request.getAttribute(...) %>`
+  direct-output XSS (deliberately narrow: JSP's `<%= %>` tag has no "safe"
+  form to contrast against, so this only catches the direct-from-request
+  subset, not e.g. a stored/DB value reflected the same way)
+- Unrestricted File Upload via the *receiver* shape, not just an argument:
+  `f.save(path)` where `f` itself came from `request.files[...]` a few lines
+  earlier (distinct from, and complementary to, the argument-based taint
+  check above)
+- Format String Injection (Python): a template string built up piece by
+  piece with `+=` (rather than being a single literal) that's later passed
+  as the control string to its own `.format(...)` call — if any
+  concatenated piece can carry attacker-influenced text (a log file, a
+  stored value, a header), that text's own `{...}` syntax gets interpreted
+  against whatever kwargs are given, which can walk object attributes to
+  leak secrets
+- Source code embedded directly in a Dockerfile heredoc (`RUN cat <<EOF >
+  app.js ... EOF`) rather than written as its own file — a surprisingly
+  common shape for small single-file challenges, which an extension-based
+  file walk can never see on its own. flagmap pulls the heredoc body back
+  out and runs it through the exact same pattern/taint pipeline as a normal
+  file, attributed to a synthetic `Dockerfile (heredoc -> app.js, from line
+  N)` path so findings still point somewhere useful
+
+**Misconfigurations** (Dockerfile, docker-compose, nginx/apache, .env,
+vsftpd.conf, redis.conf, my.cnf, php.ini, sshd_config, Kubernetes manifests):
+
+- Containers running as root / privileged / sharing the host namespace
+- Docker socket mounted into a container or pod (common escape-to-host path)
+- Hardcoded secrets in Dockerfiles, compose files, or `.env`
+- Anonymous/writable FTP, unauthenticated Redis, MySQL `skip-grant-tables`
+- Directory listing enabled (nginx `autoindex`, Apache `Options Indexes`)
+- `allow_url_include`/`register_globals` enabled in `php.ini` (RFI-class bugs)
+- SSH `PermitRootLogin`/`PermitEmptyPasswords` set to yes
+- Database/admin ports published to the host network unnecessarily
+- Dangerous Apache `AddType application/x-httpd-php .jpg`-style directives
+  (makes uploaded images/text files execute as PHP — a common upload-to-RCE
+  primitive, checked in both generic Apache configs and `.htaccess` files)
+- Terraform `output` blocks whose name suggests a credential but aren't
+  marked `sensitive = true` (leaks into `.tfstate`/CI logs in cleartext)
+- `.sh` provisioning/bootstrap scripts: HashiCorp Vault started with
+  `server -dev` (auto-unseals with a well-known, logged root token), plus
+  Redis/MongoDB started with protection/auth explicitly disabled
+- JavaScript sourcemap (`.map`) files shipped alongside a production build
+  (sniffed by content shape — `"mappings"`/`"sources"` keys — not just the
+  extension) — anyone can unmap minified JS back into readable source,
+  commonly exposing internal logic or hardcoded secrets never meant to be
+  client-visible
+
+This list keeps growing — see "Extending it" below, and the project's commit
+history for real CyberSci challenges this was tested against.
+
+## Install
+
+As of v1.0.0, flagmap depends on `tree-sitter` plus the Python/JavaScript/PHP
+grammar packages for the structural matching engine (see "Architecture"
+above). It still *works* without them — it falls back to the regex engine
+for every language — but install them to get the accuracy improvement:
+
+```bash
+cd flagmap
+pip install -e .
+```
+
+`pip install -e .` pulls in `tree-sitter`/`tree-sitter-python`/
+`tree-sitter-javascript`/`tree-sitter-php` automatically via
+`install_requires` in `setup.py`. This gives you a `flagmap` command. Or
+just run it without installing:
+
+```bash
+python3 -m flagmap <path>
+```
+
+## Usage
+
+```bash
+# scan a folder (the extracted challenge source)
+flagmap ./challenge_source
+
+# scan a single file
+flagmap ./challenge_source/app.py
+
+# only show high-severity, high-confidence findings
+flagmap ./challenge_source --severity high --min-confidence likely
+
+# machine-readable output (includes both "findings" and "chains")
+flagmap ./challenge_source --json
+
+# no color (for piping/logging)
+flagmap ./challenge_source --no-color
+
+# skip the attack-chain correlation and/or the Start Here shortlist
+flagmap ./challenge_source --no-chains --no-start-here
+
+# print the installed version
+flagmap --version
+```
+
+Output is split into up to four sections:
+
+1. **Code Vulnerabilities** — exploitable bugs in the app's source, each
+   with a suggested payload under `try:`.
+2. **Misconfigurations** — infra/config issues like a Dockerfile running as
+   root or a wildcard CORS origin, each with a suggested remediation under
+   `fix:`. This scan runs automatically alongside the code scan — no
+   separate flag needed.
+3. **Attack Chains** — findings correlated into a likely exploit path (e.g.
+   an upload bug + a dangerous Apache `AddType` = direct RCE, or a root
+   container + any RCE primitive = no privilege-escalation step needed).
+   This is a plain co-occurrence check over the findings already produced —
+   not new scanning or dataflow analysis — so treat a chain like any other
+   `possible`-confidence finding: a strong hint of where to look first, not
+   a guarantee the path is real. See `chains.py`.
+4. **Start Here** — a ranked shortlist of the 3-5 highest-value findings,
+   prioritizing anything that's part of a detected attack chain, then by
+   severity, then by confidence. Built for the moment you open a report and
+   just want to know what to click on first.
+
+## How it decides what to flag
+
+Two layers:
+
+1. **Direct patterns** — regex rules matched per line, per language
+   (e.g. `os.system(f"...")`, `unserialize($_GET[...])`).
+2. **Taint-lite** — a lightweight, single-file heuristic: it notices when a
+   variable is assigned from user input (`$x = $_GET[...]`, `x =
+   request.args.get(...)`), tracks simple re-assignment chains, and flags
+   when that variable later reaches a dangerous sink (`query()`, `system()`,
+   `include()`, `eval()`, etc.) — even if the superglobal isn't used inline
+   on that exact line.
+
+This is **not** real taint/dataflow analysis — no control flow, no scope
+awareness, no sanitizer detection. It's built to catch the specific patterns
+that show up constantly in intentionally-vulnerable CTF code. Every finding
+is tagged `likely` or `possible` confidence so you know which ones are worth
+checking first. Treat it as a fast triage pass, not ground truth — always
+verify the actual code path.
+
+Matches inside files/directories that look like test fixtures (`tests/`,
+`test_*.py`, `*.spec.js`, etc.) are suppressed for the handful of rules that
+are expected to fire constantly on legitimate test data (e.g. a hardcoded
+`password = "testpassword123"` in a unit test) — see `scanner.is_test_file()`
+and `patterns.NOISY_IN_TEST_FILES`.
+
+Any single line over 5,000 characters is skipped before any regex touches it
+(`scanner.MAX_LINE_LEN`). Real, hand-written vulnerable source is never a
+100,000-character single line — only vendored/minified assets (a bundled
+`tailwindcss.js`, `jquery.min.js`, etc.) are, and running pattern regexes
+with nested quantifiers against a line that long is catastrophic-
+backtracking territory that can hang the whole scan with no error and no
+partial output. This cap also protects the config-file line checks.
+
+The taint-source regexes (`taint.SOURCE_PATTERNS`) match anywhere on the
+right-hand side of an assignment, not just immediately after `=` — real code
+constantly wraps the superglobal/request access in `isset(...) ? ... : ''`,
+a type cast, or a default fallback (`request.args.get('q', '') or 'x'`), and
+an over-anchored regex misses taint entirely the moment it's not the very
+first thing on the line.
+
+## What it can't catch (on purpose)
+
+A few recurring bug shapes get found in testing over and over, confirmed as
+real, and then deliberately **not** turned into a pattern, because forcing
+one would either be a no-op or a false-positive generator:
+
+- **Missing authorization / IDOR** — a route that reads an id from the
+  request with no check that the current user actually owns that id. This
+  is an *absence* of a check, not a syntax shape; a regex can't tell "no
+  comparison to the current user anywhere in this function" from "there's
+  a comparison, it's just not visible on this line."
+- **LLM-tool functions with no enforced access control** — the same
+  absence-of-a-check problem, specific to `@tool`-decorated functions whose
+  only access control is prose in a system prompt.
+- **Known-CVE'd pinned dependencies/base images** (e.g. `FROM traefik:v3.4.5`
+  shipping a public dashboard path-traversal CVE) — the vulnerable code
+  isn't in the challenge's own source at all, so no amount of pattern
+  coverage over *this* repo's files would ever see it. This needs a
+  CVE/OSV-style dependency-version lookup, a fundamentally different kind
+  of check than source-pattern matching.
+- **Pure logic/semantic confusion bugs** — e.g. a signature that's verified
+  correctly over raw bytes, but the *meaning* of those bytes is then
+  re-derived a different way (OCR, a different parser) than what was
+  actually signed. There's no dangerous call or tainted sink to anchor a
+  pattern on; the bug is in what the code *means*, not what it calls.
+- **Race conditions / timing bugs** — inherently about execution order
+  across requests, not something visible in a single read of the source.
+- **Control-flow/escaping logic bugs** — e.g. a regex meant to escape a
+  hash-fragment that has an off-by-one in what it excludes, or a function
+  that's missing a `return` on one branch so execution falls through into
+  code meant for a different case. The *call shapes* here are completely
+  ordinary (a regex, a function); the bug is in what the logic actually
+  does, which is a program-semantics question, not a pattern-matching one.
+- **Known-CVE'd dependency *interaction*, not just a pinned version** — two
+  individually-fine components (e.g. a specific HTTP/1.1 parser library
+  plus a specific reverse proxy) that disagree on how to parse an edge-case
+  request, opening a request-smuggling window. Same fundamental ceiling as
+  the pinned-base-image case above (needs a CVE/OSV-style lookup across
+  *dependency pairs*, not source-pattern matching), but worth calling out
+  separately since here it's an interaction between two otherwise-correct
+  pieces of code, not a single obviously-outdated line.
+- **Browser/HTTP-parsing quirks exploited as a technique** — e.g.
+  "cookie sandwiching" (wrapping a legitimate cookie value in attacker
+  values so a vulnerable parser's prefix/suffix matching gets confused
+  about which value is real). The application code doing the comparison is
+  often entirely reasonable-looking; the bug lives in an implicit
+  assumption about how the *browser* serializes cookies, not in a
+  recognizable dangerous-call shape.
+
+If you hit one of these, that's expected — it's a sign to read the code
+yourself, not a flagmap bug report.
+
+## Example output
+
+```
+──────────────────────── flagmap 1.0.0 ─────────────────────────
+ scanned: ./challenge_source
+ 3 finding(s) across 2 class(es)  [2 high · 1 medium] · 1 attack chain detected
+────────────────────────────────────────────────────────────────
+
+── Code Vulnerabilities ──
+▶ SQL Injection  (1 match)
+  [HIGH/possible] app.php:9
+    $result = $conn->query($sql);
+    why:  Variable assigned from user input earlier in the file is used
+          inside a query call here. (tainted var: `sql`)
+    try:  ' OR 1=1 -- 
+
+── Attack Chains ──
+⚡ [HIGH] SQLi -> Dump Weak-Hashed Credentials -> Crack Offline
+    path: Use the SQLi to dump the users table -> crack the weak hashes -> log in as that user
+    why:  The SQL injection gives you the password-hash column; the weak-hashing
+          finding means those hashes are cheap to crack offline.
+    based on: app.php:9 (SQL Injection), register.php:40 (Weak Cryptography)
+
+── Start Here ──
+  1. [HIGH/possible] SQL Injection — app.php:9  (part of an attack chain)
+  2. [MEDIUM/possible] Weak Cryptography — register.php:40  (part of an attack chain)
+```
+
+## Project layout
+
+```
+flagmap/
+  flagmap/
+    __init__.py
+    __main__.py          # python -m flagmap entry point
+    cli.py                # argparse CLI, report formatting
+    scanner.py            # file walking + dispatch to the AST engine (py/js/php) or regex engine (everything else)
+    ast_engine.py          # tree-sitter structural matching + scoped taint tracking (py/js/php)
+    patterns.py            # the code vuln pattern database (regex; all languages, incl. py/js/php single-line checks)
+    taint.py              # legacy regex taint-lite + format-string-injection pass (go/java/ruby/lua/rust only)
+    heredoc.py             # pulls source embedded in Dockerfile heredocs back out for scanning
+    csrf.py                 # best-effort missing-CSRF form check
+    chains.py              # attack-path correlation over a scan's findings
+    config_patterns.py    # the misconfiguration pattern database
+    config_scanner.py      # file walking + checks (Dockerfile/nginx/.env/etc.)
+  setup.py
+  sample_challenge/       # sample vulnerable files for testing
+```
+
+## Extending it
+
+- New code-vuln rule → add to `RAW_PATTERNS` in `patterns.py`: each entry is
+  `(name, language, regex, severity, why, payload, confidence)`.
+- New language → add its extension(s) to `EXTENSION_LANGUAGE` in
+  `patterns.py`, then add `RAW_PATTERNS` entries tagged with that language
+  name.
+- New taint sink, Python/JS/PHP → add an entry to `SINKS` in `ast_engine.py`:
+  `callee_name: (vuln_name, slot, var_set)`, where `slot` is `"argN"` (the
+  Nth argument must be tainted) or `"receiver"` (the object the method is
+  called ON must be tainted), and `var_set` is `"tainted"` (the normal
+  request-input taint) or `"built"` (the Format String Injection signal —
+  see its definition for what that's for). Add the matching
+  `SEVERITY_BY_VULN`/`WHY_BY_VULN`/`PAYLOAD_BY_VULN` entries in `taint.py`
+  (both engines share these maps) if it's a new vuln name. A new *source*
+  (beyond `request.args/form/json/files`-style superglobal access) goes in
+  `SOURCE_TEXT_RE`.
+- New taint sink, Go/Java/Ruby/Lua/Rust (legacy regex engine) → add an entry
+  to `SINKS` in `taint.py` (and the matching maps as above).
+- Porting a legacy-engine language to the AST engine → tree-sitter has a
+  grammar package for most mainstream languages (`tree-sitter-go`,
+  `tree-sitter-java`, `tree-sitter-ruby`, ...). The work is: add it to
+  `_PARSERS` in `ast_engine.py`, then fill in that language's row in each of
+  `SCOPE_NODE_TYPES`/`CALL_NODE_TYPES`/`ASSIGN_NODE_TYPES`/
+  `IDENTIFIER_NODE_TYPE`/`SOURCE_TEXT_RE`/`SOURCE_CANDIDATE_NODE_TYPES` by
+  inspecting that grammar's node types and field names (`parser.parse(...)`
+  then print the tree — the module's own development process for Python/JS/
+  PHP was exactly this). The call-site/taint-propagation logic itself
+  (`_walk`, `_matched_taint_source`, the interprocedural seeding) is already
+  language-generic and needs no changes.
+- New misconfiguration rule → add to `LINE_CHECKS_RAW` in `config_patterns.py`
+  under the right category (or a new one), same tuple shape plus a `fix`
+  string instead of `payload`. For something that needs absence-detection
+  (like "no USER directive anywhere") or combining two lines, add it to
+  `_whole_file_checks()` in `config_scanner.py` instead.
+- New config file type → add a filename/extension/content rule to
+  `classify_config_file()` in `config_scanner.py`.
+- New attack chain → add an `add(...)` call in `find_chains()` in
+  `chains.py`: name two or more existing `vuln_name` substrings to correlate
+  on, a short "A -> B -> C" path description, and why the combination
+  matters. No new scanning needed — chains only look at findings already
+  produced.
+
+## Roadmap ideas
+
+- ~~AST-based matching per language instead of regex~~ — done for Python/JS/
+  PHP in v1.0.0 (see "Architecture"); Go/Java/Ruby/Lua/Rust still need
+  porting (see "Extending it").
+- Full interprocedural taint tracking (currently one hop only — a helper
+  function's own parameters get seeded from its call sites, but taint
+  doesn't propagate further than that, and each *file* is still analyzed
+  independently of every other file)
+- Recognize common sanitizer/allowlist calls (`dict.get()` against a fixed
+  mapping, a validated cast) as taint-clearing, to cut down on the
+  structurally-correct-but-practically-safe findings the broader
+  route-parameter seeding in v1.0.0 can produce (e.g. a URL path segment
+  used only as a key into a fixed allowlist dict)
+- A `--diff` mode to scan only files changed vs. a git baseline, for when
+  challenge authors release a patched version
+- Export findings straight into a writeup template
+- Absence-of-authorization-check heuristics (IDOR / missing access control
+  on an identity-shaped route parameter) — flagged in testing as a real,
+  recurring miss, but needs a scanner-level check rather than a line regex
+  to avoid heavy false positives
