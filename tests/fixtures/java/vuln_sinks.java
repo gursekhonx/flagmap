@@ -1,10 +1,13 @@
 import java.io.File;
 import java.sql.Statement;
+import javax.naming.directory.DirContext;
+import javax.naming.directory.SearchControls;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
 public class App {
     private java.sql.Connection conn;
+    private DirContext ctx;
 
     public void search(HttpServletRequest request, HttpServletResponse response) throws Exception {
         String name = request.getParameter("name");
@@ -47,5 +50,12 @@ public class App {
     private void runQuery(String sql) throws Exception {
         Statement stmt = conn.createStatement();
         stmt.executeQuery(sql);  // ruleid: SQL Injection
+    }
+
+    public void ldapLogin(HttpServletRequest request) throws Exception {
+        String uid = request.getParameter("uid");
+        String filter = "(uid=" + uid + ")";
+        SearchControls cons = new SearchControls();
+        ctx.search("dc=example,dc=com", filter, cons);  // ruleid: LDAP Injection
     }
 }

@@ -60,3 +60,10 @@ function search3() {
     $name = $_GET['name'];
     runQuery("SELECT * FROM users WHERE name = '" . $name . "'");
 }
+
+function ldapLogin() {
+    $link = ldap_connect("localhost");
+    $uid = $_GET['uid'];
+    $filter = "(uid=" . $uid . ")";
+    ldap_search($link, "dc=example,dc=com", $filter);  // ruleid: LDAP Injection
+}

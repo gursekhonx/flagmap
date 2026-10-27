@@ -268,6 +268,20 @@ SINKS = {
         "redirect": ("Open Redirect", "arg0", "tainted"),
         "save": ("Unrestricted File Upload", "receiver", "tainted"),
         "format": ("Format String Injection", "receiver", "built"),
+        # python-ldap: search_s/search_st/search_ext/search_ext_s all share
+        # the (base, scope, filterstr, ...) positional signature, filterstr
+        # at index 2. Deliberately NOT adding ldap3's Connection.search()
+        # (bare "search") — ldap3's own signature puts the filter at a
+        # *different* index (search_base, search_filter, ...) than
+        # python-ldap's, so one shared sink entry would get the arg slot
+        # wrong for whichever library isn't the one it was tuned for, on
+        # top of "search" being a near-universal method name (re.search,
+        # any custom finder/repository class) with no README-stated
+        # precedent of its own to lean on the way Java's "execute" has.
+        "search_s": ("LDAP Injection", "arg2", "tainted"),
+        "search_st": ("LDAP Injection", "arg2", "tainted"),
+        "search_ext": ("LDAP Injection", "arg2", "tainted"),
+        "search_ext_s": ("LDAP Injection", "arg2", "tainted"),
     },
     "js": {
         "query": ("SQL Injection", "arg0", "tainted"),
@@ -292,6 +306,13 @@ SINKS = {
         "fopen": ("Path Traversal / LFI", "arg0", "tainted"),
         "unserialize": ("Unsafe Deserialization", "arg0", "tainted"),
         "eval": ("Command Injection / RCE", "arg0", "tainted"),
+        # ext/ldap: ldap_search/ldap_list/ldap_read all share the
+        # (link, base_dn, filter, ...) positional signature, filter at
+        # index 2 — and the "ldap_" prefix makes these names unambiguous,
+        # unlike the bare "search" question that came up for Python/Java.
+        "ldap_search": ("LDAP Injection", "arg2", "tainted"),
+        "ldap_list": ("LDAP Injection", "arg2", "tainted"),
+        "ldap_read": ("LDAP Injection", "arg2", "tainted"),
     },
     "go": {
         # database/sql (and compatible drivers): Query/QueryRow/Exec all
@@ -330,6 +351,14 @@ SINKS = {
         "execute": ("SQL Injection", "arg0", "tainted"),
         "exec": ("Command Injection", "arg0", "tainted"),  # Runtime.getRuntime().exec(cmd)
         "sendRedirect": ("Open Redirect", "arg0", "tainted"),
+        # javax.naming.directory.DirContext.search(name, filterExpr, cons) —
+        # the standard JNDI LDAP search API; filterExpr is arg1. "search" is
+        # a generic name (same tradeoff as "execute" above, accepted for the
+        # same reason: AST findings are always confidence="possible"), but
+        # unlike Python's two LDAP libraries there's one canonical JNDI
+        # signature here, so there's no cross-library arg-slot ambiguity to
+        # avoid.
+        "search": ("LDAP Injection", "arg1", "tainted"),
     },
     "ruby": {
         # ActiveRecord raw-SQL escape hatches.

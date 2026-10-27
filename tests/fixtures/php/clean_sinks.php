@@ -33,3 +33,9 @@ function pingSafe() {
     // fixed, non-tainted argument
     system("echo hello");  // safe: Command Injection
 }
+
+function ldapLoginSafe() {
+    $link = ldap_connect("localhost");
+    // fixed, non-tainted filter
+    ldap_search($link, "dc=example,dc=com", "(uid=admin)");  // safe: LDAP Injection
+}

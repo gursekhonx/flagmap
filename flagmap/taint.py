@@ -140,6 +140,7 @@ SEVERITY_BY_VULN = {
     "Open Redirect": "medium",
     "Unrestricted File Upload": "medium",
     "Format String Injection": "high",
+    "LDAP Injection": "high",
 }
 
 WHY_BY_VULN = {
@@ -159,6 +160,10 @@ WHY_BY_VULN = {
                                 "came from a log file, a stored value, or a header), that text's own `{...}` "
                                 "syntax gets interpreted by .format() against whatever kwargs/args are given, "
                                 "which can walk object attributes to leak secrets.",
+    "LDAP Injection": "Variable assigned from user input earlier in the file is concatenated into an LDAP search "
+                       "filter here. An attacker-controlled filter can inject extra filter clauses (e.g. an "
+                       "always-true `|` branch) to bypass an auth check or enumerate directory entries the query "
+                       "wasn't meant to return.",
 }
 
 PAYLOAD_BY_VULN = {
@@ -175,6 +180,9 @@ PAYLOAD_BY_VULN = {
     "Format String Injection": "Get a `{self.__init__.__globals__[SOME_SECRET]}`-style payload into whatever "
                                 "upstream text gets concatenated into the template (e.g. a logged header value), "
                                 "then trigger the .format() call to resolve it and leak the attribute.",
+    "LDAP Injection": "*)(uid=*))(|(uid=* — closes the intended filter clause early and ORs in an "
+                      "always-true branch; adjust the attribute name to whatever the filter is built around "
+                      "(uid, cn, mail, ...).",
 }
 
 

@@ -1,11 +1,13 @@
 import os
 import pickle
 import sqlite3
+import ldap
 from flask import Flask, request, render_template_string, redirect, send_file
 
 app = Flask(__name__)
 conn = sqlite3.connect("db.sqlite3")
 cur = conn.cursor()
+ldap_conn = ldap.initialize("ldap://localhost")
 
 
 @app.route("/search")
@@ -91,3 +93,10 @@ class UserController:
 
     def run_query(self, q):
         cur.execute(q)  # ruleid: SQL Injection
+
+
+@app.route("/ldap")
+def ldap_login():
+    uid = request.args.get("uid")
+    filterstr = "(uid=" + uid + ")"
+    ldap_conn.search_s("dc=example,dc=com", ldap.SCOPE_SUBTREE, filterstr)  # ruleid: LDAP Injection

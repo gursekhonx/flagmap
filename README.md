@@ -11,7 +11,7 @@ Built for jeopardy-style CTFs (like CyberSci regionals) where web challenges
 sometimes hand you the source code. Instead of eyeballing every file, point
 flagmap at the folder and get a triaged list of what's worth trying first.
 
-## Architecture (v1.3.0)
+## Architecture (v1.4.0)
 
 **All eight supported languages are matched structurally**, via
 [`tree-sitter`](https://tree-sitter.github.io/tree-sitter/) parse trees
@@ -135,6 +135,22 @@ codebase, not just one. This class of bug showed up three times:
   neither grammar represents `this`/`$this` as an explicit parameter at
   all, so there was nothing to misalign.
 
+**LDAP Injection (v1.4.0)** is the first new vuln class added after all 8
+languages reached AST parity, and it's a useful case study in picking sink
+names deliberately: Python has two popular LDAP libraries
+(`python-ldap`/`ldap3`) whose search methods put the filter argument at
+*different* positional indices, so rather than pick one and get the other
+wrong, only `python-ldap`'s more specific names (`search_s`/`search_st`/
+`search_ext`/`search_ext_s`) were added — `ldap3`'s bare `.search()` was
+left out entirely. PHP's `ldap_search`/`ldap_list`/`ldap_read` carry an
+unambiguous `ldap_` prefix, so they were added without any such caveat.
+Java's JNDI `DirContext.search(name, filterExpr, cons)` reuses the same
+generic `"search"` name problem as Java's own pre-existing `"execute"` sink
+(`ExecutorService.execute(Runnable)` could share it) — accepted for the
+same reason that one was: every AST finding is already tagged
+`confidence="possible"`, specifically to cover cases exactly like this
+where the callee name alone can't fully disambiguate which API is meant.
+
 **Misconfiguration scanning (`config_scanner.py`) stays regex-based for
 every file type**, deliberately — Dockerfiles, `nginx.conf`, `.env`, and
 similar config formats are simple key/value or directive-per-line formats
@@ -200,6 +216,19 @@ Ruby/Rails, Lua, Rust):
   anywhere in the file)
 - GraphQL / Query Injection (a query/mutation document built with `%`
   formatting or template-literal interpolation instead of GraphQL variables)
+- LDAP Injection (AST-matched since v1.4.0, Python/PHP/Java): a search
+  filter string built from request data and passed to python-ldap's
+  `search_s`/`search_st`/`search_ext`/`search_ext_s`, PHP's `ldap_search`/
+  `ldap_list`/`ldap_read`, or Java JNDI's `DirContext.search` — lets an
+  attacker inject extra filter clauses (an always-true `|` branch) to
+  bypass an auth check or dump directory entries outside the intended
+  query. Deliberately not covered for Node (`ldapjs`) or Ruby (`net-ldap`):
+  both pass the filter as a field inside an options/hash argument rather
+  than a plain positional string, which doesn't fit the arg-slot sink
+  model any cleaner than the IDOR/absence-of-check cases in "What it can't
+  catch" — forcing a match there would mean reaching into an object
+  literal's keys, a different and much more false-positive-prone kind of
+  check than anything else in `SINKS`.
 - Sensitive Data Exposure in Logs (passwords/secrets/tokens/hashes passed to
   `logger.debug`/`console.log`/`error_log` — common with structured loggers
   whose output ends up in a dashboard or log aggregator)
@@ -645,6 +674,17 @@ on the normal `python3` interpreter's path, is the reliable way to run it.
 - ~~AST-based matching per language instead of regex~~ — done for all 8
   supported languages: Python/JS/PHP in v1.0.0, Go in v1.1.0, Java/Ruby in
   v1.2.0, Lua/Rust in v1.3.0 (see "Architecture").
+- ~~LDAP Injection~~ — added in v1.4.0 for Python/PHP/Java (see
+  "Architecture" and "What it catches"); Node/Ruby intentionally skipped,
+  their LDAP libraries put the filter inside an options/hash argument
+  rather than a plain positional string.
+- More vuln classes that are currently regex-only for most/all languages
+  could get real AST taint-tracking the same way SQL Injection/Command
+  Injection/Path Traversal did: SSRF (`requests`/`axios`/`curl_setopt`
+  fed from request data), SSTI beyond Python's `render_template_string`
+  (EJS/Handlebars/Nunjucks), XXE (DOMDocument/lxml parser config), and
+  NoSQL Injection (MongoDB `find()`/`update()` with a raw request-body
+  filter) are the next most CTF-common candidates.
 - Full interprocedural taint tracking (currently one hop only — a helper
   function's own parameters get seeded from its call sites, but taint
   doesn't propagate further than that, and each *file* is still analyzed

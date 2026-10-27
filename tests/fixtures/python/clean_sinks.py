@@ -1,10 +1,12 @@
 import os
 import sqlite3
+import ldap
 from flask import Flask, request, redirect
 
 app = Flask(__name__)
 conn = sqlite3.connect("db.sqlite3")
 cur = conn.cursor()
+ldap_conn = ldap.initialize("ldap://localhost")
 
 
 @app.route("/search")
@@ -34,3 +36,9 @@ def calc():
     # generic regex regardless of whether the argument is tainted today —
     # not tested as a false-positive case here, that's by design.
     return str(eval("1 + 1"))
+
+
+@app.route("/ldap_safe")
+def ldap_safe():
+    # fixed, non-tainted filter string
+    ldap_conn.search_s("dc=example,dc=com", ldap.SCOPE_SUBTREE, "(uid=admin)")  # safe: LDAP Injection

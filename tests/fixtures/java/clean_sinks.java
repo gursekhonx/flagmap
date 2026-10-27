@@ -1,9 +1,12 @@
 import java.sql.PreparedStatement;
+import javax.naming.directory.DirContext;
+import javax.naming.directory.SearchControls;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
 public class App {
     private java.sql.Connection conn;
+    private DirContext ctx;
 
     public void searchSafe(HttpServletRequest request) throws Exception {
         String name = request.getParameter("name");
@@ -24,5 +27,11 @@ public class App {
     public void goSafe(HttpServletResponse response) throws Exception {
         // same-origin relative redirect — not an open redirect
         response.sendRedirect("/dashboard");  // safe: Open Redirect
+    }
+
+    public void ldapLoginSafe() throws Exception {
+        // fixed, non-tainted filter
+        SearchControls cons = new SearchControls();
+        ctx.search("dc=example,dc=com", "(uid=admin)", cons);  // safe: LDAP Injection
     }
 }
