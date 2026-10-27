@@ -45,3 +45,17 @@ def log_order_access(order_id):
     # id is read but never reaches a lookup/mutation call — nothing to see.
     order_id = request.args.get("order_id")
     app.logger.info("access attempt for order %s", order_id)  # safe
+
+
+# Django's get_object_or_404 — a distinct lookup idiom from the
+# SQLAlchemy-style .filter_by().first() chain above, found missing from
+# LOOKUP_SINK_RE during stress-testing beyond this file's own fixtures.
+def django_order_detail(request, order_id):  # ruleid: Missing Authorization / IDOR
+    order = get_object_or_404(Order, pk=order_id)
+    return render(request, "order.html", {"order": order})
+
+
+def django_order_detail_safe(request, order_id):
+    # ownership folded directly into the lookup call.
+    order = get_object_or_404(Order, pk=order_id, user=request.user)  # safe: Missing Authorization / IDOR
+    return render(request, "order.html", {"order": order})

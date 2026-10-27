@@ -139,7 +139,8 @@ ID_PARAM_RE = re.compile(
 # kept since it's distinctive enough not to share that problem.
 LOOKUP_SINK_RE = re.compile(
     r"""\b(?:find(?:_by_id|ById|OrFail)?|findOne|findById|getById|select|where|
-         filter_by|update(?:One|Many)?|delete(?:One|Many)?|destroy|remove|save|first)\s*\(""",
+         filter_by|get_object_or_404|update(?:One|Many)?|delete(?:One|Many)?|
+         destroy|remove|save|first)\s*\(""",
     re.IGNORECASE | re.VERBOSE,
 )
 

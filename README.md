@@ -546,8 +546,10 @@ as long as it's never oversold as more than that.
   route-path-binding idiom, where there's no extraction call at all —
   `@app.route("/orders/<int:order_id>") def view(order_id): ...`); (2)
   does it hand that value to something lookup/mutation-shaped (`find`,
-  `findById`, `where`, `filter_by`, `update`, `delete`, `destroy`, ...);
-  and (3) is there no sign, anywhere in the function OR up to 5 lines
+  `findById`, `where`, `filter_by`, `get_object_or_404` (Django's own
+  distinct idiom — SQLAlchemy/ActiveRecord-style `.filter_by().first()`
+  chains don't cover it), `update`, `delete`, `destroy`, ...); and (3) is
+  there no sign, anywhere in the function OR up to 5 lines
   above it (to catch a decorator/annotation sitting directly on top), of
   an *ownership* check. That third part is the one worth being precise
   about: it deliberately does **not** treat a bare authentication check
@@ -584,6 +586,27 @@ as long as it's never oversold as more than that.
   flags something, the right response is to read the function, not to
   trust the label — exactly the same advice "What it can't catch" gives
   for every category it refuses to even attempt.
+
+  Shipping this against more than its own curated fixtures turned up
+  five real gaps before it could be trusted at all, in the same spirit
+  as the index-alignment bugs the Lua/Rust port found: a self-collision
+  where the id-EXTRACTION call itself (`request.args.get(...)`) also
+  satisfied the lookup-sink check (bare `"get("` was in that list —
+  removed, since every Flask/Express route's own extraction line would
+  otherwise count as its own "lookup"); a missed Express idiom
+  (`req.params.id`, plain dot-property access, arguably the *more*
+  common shape than the dict-style access originally covered); missed
+  camelCase parameter names (`$orderId`/`orderId` vs. the originally
+  snake_case-only `order_id` check — fixed with a normalization step,
+  not just more alternation branches, since PHP/Java/JS routinely use
+  the different convention Python/Ruby don't); Go's extraction idioms
+  (`r.URL.Query().Get`, `mux.Vars`, `chi.URLParam`) not resembling any
+  other language's shape at all; and Django's `get_object_or_404` not
+  being recognized as a lookup call. All five are fixed and locked into
+  the fixtures now, but the pattern is worth naming plainly: a
+  best-effort heuristic like this one earns trust from how hard it's
+  been stress-tested against real framework idioms, not from how
+  reasonable its design sounds on paper.
 
 ## What it can't catch (on purpose)
 
@@ -804,6 +827,45 @@ on the normal `python3` interpreter's path, is the reliable way to run it.
   about the fundamental limit, the heuristic just accepts the same
   coarse, low-confidence trade the CSRF check already made rather than
   refusing to try.
+- Considered two more business-logic/"logical vuln" heuristics in the
+  same spirit as IDOR, and deliberately held off on both — writing down
+  why, the same way every other deliberate non-decision in this file
+  does, rather than silently not mentioning them:
+  - **Client-controlled price/amount tampering** (a request body field
+    like `price`/`amount`/`total` trusted directly into an order/payment
+    total instead of a server-side catalog lookup) — the CTF/real-world
+    bug class is real, but unlike an id with no ownership check, a
+    client-supplied amount is NOT inherently suspicious on its own (a
+    "pay what you want" donation flow, a custom quote field, a tip
+    amount are all legitimate uses of the exact same shape). A
+    precise-enough version would need to recognize "a product/catalog
+    lookup by id happened elsewhere in this function, AND the client
+    amount is used instead of (or alongside, overriding) that lookup's
+    own price" — a correlation IDOR's ownership check doesn't need to
+    make. Shipping the naive version (any client-supplied amount used in
+    a total, full stop) would be the generic-collision problem all over
+    again, except worse: not a naming collision, a *semantic* one, where
+    the "vulnerable" and "legitimate" shapes are the literally the same
+    code pattern.
+  - **TOCTOU/race condition on a balance or stock check** (`if
+    balance >= amount: balance -= amount` as two separate statements
+    instead of one atomic update/transaction — the classic "coupon race
+    condition"/double-spend CTF category) — rejected for a different
+    reason: recognizing "no atomicity" well would mean recognizing *every*
+    language/ORM's atomic-update idiom (Django's `F()` expressions,
+    SQLAlchemy's `update().where(...).values(...)`, a raw atomic
+    `UPDATE ... SET x = x - ? WHERE x >= ?`, `SELECT ... FOR UPDATE`,
+    Rails' `with_lock`/`transaction do`, a mutex/lock primitive, ...) to
+    avoid flagging code that already does this correctly just in a
+    shape the check doesn't recognize. That's a much larger, much
+    higher-false-positive-risk surface to get right than IDOR's ownership
+    check turned out to be, and getting it wrong here is worse than not
+    having it: a security tool that cries wolf on correctly-written
+    atomic code trains people to ignore it. Worth revisiting if a
+    narrower, safer signal turns up (e.g. flagging only the specific
+    "separate read-then-write with no lock/transaction keyword anywhere
+    in the function" shape, which is at least a well-defined absence to
+    check for) — not attempted this round.
 - Looked at SSTI beyond Python's `render_template_string` (EJS/
   Handlebars/Nunjucks), XXE (DOMDocument/lxml parser config), and NoSQL
   Injection (MongoDB `find()`/`update()`/Mongoose) for the same AST
