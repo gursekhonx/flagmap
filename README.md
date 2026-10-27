@@ -11,7 +11,7 @@ Built for jeopardy-style CTFs (like CyberSci regionals) where web challenges
 sometimes hand you the source code. Instead of eyeballing every file, point
 flagmap at the folder and get a triaged list of what's worth trying first.
 
-## Architecture (v1.4.0)
+## Architecture (v1.5.0)
 
 **All eight supported languages are matched structurally**, via
 [`tree-sitter`](https://tree-sitter.github.io/tree-sitter/) parse trees
@@ -229,6 +229,25 @@ Ruby/Rails, Lua, Rust):
   catch" — forcing a match there would mean reaching into an object
   literal's keys, a different and much more false-positive-prone kind of
   check than anything else in `SINKS`.
+- SSRF (AST-matched since v1.4.0, in addition to the existing regex
+  coverage, Python/PHP/JS): `urlopen()` (Python), `file_get_contents()`
+  (PHP), `fetch()` (JS) with a URL built from request data *anywhere
+  upstream in the function or one hop away in a helper* — e.g. `urlopen("http://" +
+  host + "/status")` where `host` came from a request read several lines
+  earlier, which the existing regex can't reach (its bare-variable rule
+  only matches when the *entire* argument is a single identifier token,
+  and its same-line rule needs the request read literally on that line).
+  When the sink call's argument genuinely is a single bare identifier on
+  one line, the pre-existing regex rule already catches that same shape
+  and scanner.py's cross-engine dedup (same file/line/vuln_name) keeps
+  the regex finding rather than emitting both — by long-standing design
+  (see `scanner.py`'s `seen` set), not new to this port. Deliberately did
+  NOT add `requests.get/post/...`, `axios.get/post/...`, or `http(s).get`
+  as sinks: `get`/`post` are near-universal method names (plain dict/Map
+  access, any ORM/cache/client `.get()` — `request.args.get()`, a taint
+  *source* in this very table, is itself a `.get()` call) and would be a
+  far riskier collision than anything else accepted in `SINKS`; the regex
+  layer still covers those same-line and bare-variable.
 - Sensitive Data Exposure in Logs (passwords/secrets/tokens/hashes passed to
   `logger.debug`/`console.log`/`error_log` — common with structured loggers
   whose output ends up in a dashboard or log aggregator)
@@ -678,13 +697,17 @@ on the normal `python3` interpreter's path, is the reliable way to run it.
   "Architecture" and "What it catches"); Node/Ruby intentionally skipped,
   their LDAP libraries put the filter inside an options/hash argument
   rather than a plain positional string.
+- ~~SSRF~~ — added real AST taint-tracking in v1.4.0 for Python
+  (`urlopen`)/PHP (`file_get_contents`)/JS (`fetch`) — see "What it
+  catches"; `requests.get/post`/`axios.get/post`/`http(s).get` were
+  deliberately left to the regex layer (too generic a name to add
+  safely — see "What it catches" for why).
 - More vuln classes that are currently regex-only for most/all languages
-  could get real AST taint-tracking the same way SQL Injection/Command
-  Injection/Path Traversal did: SSRF (`requests`/`axios`/`curl_setopt`
-  fed from request data), SSTI beyond Python's `render_template_string`
-  (EJS/Handlebars/Nunjucks), XXE (DOMDocument/lxml parser config), and
-  NoSQL Injection (MongoDB `find()`/`update()` with a raw request-body
-  filter) are the next most CTF-common candidates.
+  could get the same treatment: SSTI beyond Python's
+  `render_template_string` (EJS/Handlebars/Nunjucks), XXE
+  (DOMDocument/lxml parser config), and NoSQL Injection (MongoDB
+  `find()`/`update()` with a raw request-body filter) are the next most
+  CTF-common candidates.
 - Full interprocedural taint tracking (currently one hop only — a helper
   function's own parameters get seeded from its call sites, but taint
   doesn't propagate further than that, and each *file* is still analyzed

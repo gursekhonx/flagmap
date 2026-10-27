@@ -141,6 +141,7 @@ SEVERITY_BY_VULN = {
     "Unrestricted File Upload": "medium",
     "Format String Injection": "high",
     "LDAP Injection": "high",
+    "SSRF (Server-Side Request Forgery)": "high",
 }
 
 WHY_BY_VULN = {
@@ -164,6 +165,10 @@ WHY_BY_VULN = {
                        "filter here. An attacker-controlled filter can inject extra filter clauses (e.g. an "
                        "always-true `|` branch) to bypass an auth check or enumerate directory entries the query "
                        "wasn't meant to return.",
+    "SSRF (Server-Side Request Forgery)": "Variable assigned from user input earlier in the file is used as the "
+                                           "URL for an outbound request here — the server can be made to fetch "
+                                           "internal/cloud-metadata URLs or scan the internal network on the "
+                                           "attacker's behalf.",
 }
 
 PAYLOAD_BY_VULN = {
@@ -183,6 +188,8 @@ PAYLOAD_BY_VULN = {
     "LDAP Injection": "*)(uid=*))(|(uid=* — closes the intended filter clause early and ORs in an "
                       "always-true branch; adjust the attribute name to whatever the filter is built around "
                       "(uid, cn, mail, ...).",
+    "SSRF (Server-Side Request Forgery)": "Try http://127.0.0.1:PORT/, http://169.254.169.254/latest/meta-data/ "
+                                           "(cloud metadata), or an internal service hostname.",
 }
 
 

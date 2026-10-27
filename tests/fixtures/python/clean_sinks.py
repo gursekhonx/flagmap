@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import ldap
+from urllib.request import urlopen
 from flask import Flask, request, redirect
 
 app = Flask(__name__)
@@ -42,3 +43,9 @@ def calc():
 def ldap_safe():
     # fixed, non-tainted filter string
     ldap_conn.search_s("dc=example,dc=com", ldap.SCOPE_SUBTREE, "(uid=admin)")  # safe: LDAP Injection
+
+
+@app.route("/proxy_safe")
+def proxy_safe():
+    # fixed, non-tainted URL
+    return urlopen("https://api.example.com/status").read()  # safe: SSRF (Server-Side Request Forgery)

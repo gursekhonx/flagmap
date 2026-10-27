@@ -39,3 +39,8 @@ function ldapLoginSafe() {
     // fixed, non-tainted filter
     ldap_search($link, "dc=example,dc=com", "(uid=admin)");  // safe: LDAP Injection
 }
+
+function proxySafe() {
+    // fixed, non-tainted URL
+    $body = file_get_contents("https://api.example.com/status");  // safe: SSRF (Server-Side Request Forgery)
+}

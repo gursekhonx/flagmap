@@ -52,3 +52,9 @@ app.get("/search2", (req, res) => {
   const name = req.query.name;
   runQuery("SELECT * FROM users WHERE name = '" + name + "'");
 });
+
+app.get("/proxy", async (req, res) => {
+  const target = req.query.url;
+  const upstream = await fetch(target);  // ruleid: SSRF (Server-Side Request Forgery)
+  res.send(await upstream.text());
+});

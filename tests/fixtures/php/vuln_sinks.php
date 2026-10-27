@@ -67,3 +67,8 @@ function ldapLogin() {
     $filter = "(uid=" . $uid . ")";
     ldap_search($link, "dc=example,dc=com", $filter);  // ruleid: LDAP Injection
 }
+
+function proxy() {
+    $url = $_GET['url'];
+    $body = file_get_contents($url);  // ruleid: SSRF (Server-Side Request Forgery)
+}

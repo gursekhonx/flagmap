@@ -2,6 +2,7 @@ import os
 import pickle
 import sqlite3
 import ldap
+from urllib.request import urlopen
 from flask import Flask, request, render_template_string, redirect, send_file
 
 app = Flask(__name__)
@@ -100,3 +101,9 @@ def ldap_login():
     uid = request.args.get("uid")
     filterstr = "(uid=" + uid + ")"
     ldap_conn.search_s("dc=example,dc=com", ldap.SCOPE_SUBTREE, filterstr)  # ruleid: LDAP Injection
+
+
+@app.route("/proxy")
+def proxy():
+    target = request.args.get("url")
+    return urlopen(target).read()  # ruleid: SSRF (Server-Side Request Forgery)

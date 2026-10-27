@@ -20,3 +20,9 @@ app.get("/calc", (req, res) => {
   // not tested as a false-positive case here, that's by design.
   res.send(String(eval("1 + 1")));
 });
+
+app.get("/proxy_safe", async (req, res) => {
+  // fixed, non-tainted URL
+  const upstream = await fetch("https://api.example.com/status");  // safe: SSRF (Server-Side Request Forgery)
+  res.send(await upstream.text());
+});

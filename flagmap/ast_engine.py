@@ -282,6 +282,15 @@ SINKS = {
         "search_st": ("LDAP Injection", "arg2", "tainted"),
         "search_ext": ("LDAP Injection", "arg2", "tainted"),
         "search_ext_s": ("LDAP Injection", "arg2", "tainted"),
+        # urllib(2).urlopen(url) — distinctive, rarely-reused name, unlike
+        # requests.get/post/put/etc., which were deliberately NOT added
+        # here: "get"/"post" are near-universal method names (dict.get,
+        # request.args.get — a taint SOURCE in this very table's own
+        # design — any ORM/cache/client .get()), far riskier collision
+        # candidates than anything else accepted elsewhere in this file.
+        # The regex layer (patterns.py) still independently covers
+        # requests.get/post/etc. same-line and bare-variable SSRF.
+        "urlopen": ("SSRF (Server-Side Request Forgery)", "arg0", "tainted"),
     },
     "js": {
         "query": ("SQL Injection", "arg0", "tainted"),
@@ -294,6 +303,14 @@ SINKS = {
         "renderString": ("Server-Side Template Injection (SSTI)", "arg0", "tainted"),
         "eval": ("Command Injection / RCE", "arg0", "tainted"),
         "redirect": ("Open Redirect", "arg0", "tainted"),
+        # Global fetch(url) — a web-standard built-in, distinctive enough
+        # to accept despite being a method name a custom class could also
+        # define (same accepted-ambiguity tradeoff as Java's "execute"/
+        # "search"). Deliberately NOT adding axios.get/post or http.get/
+        # https.get here — "get" is far too generic a name (collides with
+        # plain object/Map access) to add as a global sink; the regex
+        # layer already covers those same-line and bare-variable.
+        "fetch": ("SSRF (Server-Side Request Forgery)", "arg0", "tainted"),
     },
     "php": {
         "query": ("SQL Injection", "arg0", "tainted"),
@@ -313,6 +330,17 @@ SINKS = {
         "ldap_search": ("LDAP Injection", "arg2", "tainted"),
         "ldap_list": ("LDAP Injection", "arg2", "tainted"),
         "ldap_read": ("LDAP Injection", "arg2", "tainted"),
+        # file_get_contents($url) — reads local files AND fetches remote
+        # URLs (http://, ftp://, php://) depending on the scheme, so a
+        # tainted argument here doubles as SSRF/LFI. Already covered by a
+        # same-line regex (patterns.py) with "medium" severity/"possible"
+        # confidence; this AST entry adds the cross-statement/
+        # interprocedural case the regex can't reach, and reuses the SSRF
+        # vuln name rather than Path Traversal / LFI since that's the more
+        # commonly-exploited half of this dual-purpose call in CTF writeups
+        # (the existing fopen() entry above already covers the LFI-only
+        # local-file-handle case).
+        "file_get_contents": ("SSRF (Server-Side Request Forgery)", "arg0", "tainted"),
     },
     "go": {
         # database/sql (and compatible drivers): Query/QueryRow/Exec all
