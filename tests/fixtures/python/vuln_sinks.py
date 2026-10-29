@@ -2,6 +2,7 @@ import os
 import pickle
 import sqlite3
 import ldap
+from lxml import etree
 from urllib.request import urlopen
 from flask import Flask, request, render_template_string, redirect, send_file
 
@@ -107,3 +108,14 @@ def ldap_login():
 def proxy():
     target = request.args.get("url")
     return urlopen(target).read()  # ruleid: SSRF (Server-Side Request Forgery)
+
+
+@app.route("/xxe", methods=["POST"])
+def xxe():
+    # Deliberately no safe-parsing guard anywhere in this file — see the
+    # guarded counterpart in clean_sinks.py. (Careful: don't restate any
+    # of xxe_guard.py's actual marker strings in this comment, or this
+    # file would suppress its own finding — exactly the self-referential
+    # trap loot.py's docstring fell into earlier.)
+    data = request.data
+    return str(etree.fromstring(data))  # ruleid: XML External Entity (XXE)

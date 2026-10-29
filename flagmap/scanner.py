@@ -14,6 +14,7 @@ from .config_scanner import scan_config_path
 from .heredoc import iter_heredoc_sources
 from .loot import find_loot
 from .deps import find_vulnerable_deps
+from .xxe_guard import filter_guarded_xxe
 from .ast_engine import scan_ast, AST_SUPPORTED_LANGUAGES
 
 # No hand-written vulnerable application code is ever a single line this long —
@@ -130,6 +131,13 @@ def scan_lines(path: str, language: str, lines: List[str], patterns: list) -> Li
                     payload=pat["payload"],
                     confidence=pat["confidence"],
                 ))
+
+    # Whole-file false-positive suppression for the blanket XXE regexes
+    # above: if this file also shows a recognized safe-parsing marker
+    # (defusedxml, resolve_entities=False, libxml_disable_entity_loader)
+    # anywhere, don't flag it — see xxe_guard.py's module docstring for
+    # exactly what's checked and the coarse-grained trade-off involved.
+    findings = filter_guarded_xxe(language, "".join(lines), findings)
 
     seen = {(f.line_no, f.vuln_name) for f in findings}
 

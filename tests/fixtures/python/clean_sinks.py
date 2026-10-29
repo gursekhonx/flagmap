@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import ldap
+import defusedxml.ElementTree as etree
 from urllib.request import urlopen
 from flask import Flask, request, redirect
 
@@ -49,3 +50,14 @@ def ldap_safe():
 def proxy_safe():
     # fixed, non-tainted URL
     return urlopen("https://api.example.com/status").read()  # safe: SSRF (Server-Side Request Forgery)
+
+
+@app.route("/xxe_safe", methods=["POST"])
+def xxe_safe():
+    # the call shape alone (`etree.fromstring(...)`) is exactly what
+    # patterns.py's XXE regex matches on, same as the vulnerable case in
+    # vuln_sinks.py — what's different here, and what xxe_guard.py must
+    # pick up on, is the `defusedxml` import at the top of this file,
+    # which makes this specific "etree" safe by construction.
+    data = request.data
+    return str(etree.fromstring(data))  # safe: XML External Entity (XXE)

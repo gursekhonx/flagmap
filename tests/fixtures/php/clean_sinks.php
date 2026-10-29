@@ -44,3 +44,14 @@ function proxySafe() {
     // fixed, non-tainted URL
     $body = file_get_contents("https://api.example.com/status");  // safe: SSRF (Server-Side Request Forgery)
 }
+
+function xxeSafe() {
+    // the call shape alone (`simplexml_load_string(...)`) is exactly what
+    // patterns.py's XXE regex matches on, same as the vulnerable case in
+    // vuln_sinks.php — what's different here, and what xxe_guard.py must
+    // pick up on, is the libxml_disable_entity_loader(true) call below,
+    // which makes external-entity resolution unavailable file-wide.
+    libxml_disable_entity_loader(true);
+    $xml = simplexml_load_string($_POST['xml']);  // safe: XML External Entity (XXE)
+    return $xml;
+}

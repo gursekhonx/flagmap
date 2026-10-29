@@ -72,3 +72,13 @@ function proxy() {
     $url = $_GET['url'];
     $body = file_get_contents($url);  // ruleid: SSRF (Server-Side Request Forgery)
 }
+
+function xxe() {
+    // Deliberately no safe-parsing guard anywhere in this file — see the
+    // guarded counterpart in clean_sinks.php. (Careful: don't restate
+    // xxe_guard.py's actual marker call here, or this file would
+    // suppress its own finding — the same self-referential trap
+    // loot.py's docstring fell into earlier.)
+    $xml = simplexml_load_string($_POST['xml']);  // ruleid: XML External Entity (XXE)
+    return $xml;
+}

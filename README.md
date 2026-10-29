@@ -194,7 +194,11 @@ Ruby/Rails, Lua, Rust):
   with no extension/type allowlist)
 - Cross-Site Scripting / XSS (reflected `echo`/`print` in PHP, unescaped
   template returns in Flask, `.innerHTML =`/`res.send()` in JS)
-- XXE (DOMDocument/simplexml in PHP, lxml/xmltodict in Python)
+- XXE (DOMDocument/simplexml in PHP, lxml/xmltodict in Python) — with
+  whole-file false-positive suppression for recognized safe-parsing
+  markers (`defusedxml`, `resolve_entities=False`,
+  `libxml_disable_entity_loader(true)`); see `xxe_guard.py` and
+  "Best-effort heuristics" below
 - Open Redirect (`header("Location: ".$_GET...)`, Flask `redirect()`, Express
   `res.redirect()` from request data)
 - NoSQL Injection (MongoDB `find()`/`update()` with the whole filter taken
@@ -451,7 +455,7 @@ depending on code this tool can't fully see), a `.git` folder or a
 flag-shaped string being present is not probabilistic: it's a fact about
 what's in the tarball you were just handed.
 
-**Vulnerable Dependencies** (`deps.py`, added v1.7.0) — a fourth category,
+**Vulnerable Dependencies** (`deps.py`, added v1.8.0) — a fourth category,
 printed in its own section between Loot/Recon and Code Vulnerabilities,
 and ranked second in "Start Here" (after loot, ahead of everything else):
 a package manifest or lockfile pins an *exact* version, and that exact
@@ -626,7 +630,10 @@ fully solvable — see "What it can't catch" for why absence-of-a-check bugs
 are flagmap's hardest category in general. These two exist anyway because
 the alternative (refusing to try at all) throws away a signal that's
 genuinely useful often enough to be worth a "possible"-confidence flag,
-as long as it's never oversold as more than that.
+as long as it's never oversold as more than that. A third, related check
+runs the same "whole-file textual signal, not real data-flow" logic in
+reverse — suppressing a finding when a safety marker *is* present, rather
+than flagging when a check seems absent.
 
 - **Missing CSRF Protection** (`csrf.py`) — the original of the two: a
   `<form method="post">` with no mention of "csrf" anywhere in the same
@@ -711,6 +718,42 @@ as long as it's never oversold as more than that.
   best-effort heuristic like this one earns trust from how hard it's
   been stress-tested against real framework idioms, not from how
   reasonable its design sounds on paper.
+
+- **XXE guard awareness** (`xxe_guard.py`, added v1.9.0) — not a new
+  finding, a false-positive *suppressor* for the existing "XML External
+  Entity (XXE)" pattern matches (`patterns.py`'s XXE regexes are blanket
+  "this XML-parsing call exists" matches with no way to see whether the
+  parser was configured safely somewhere else in the file). If a
+  recognized safe-parsing marker appears **anywhere** in the same file —
+  Python: `defusedxml` used anywhere, `resolve_entities=False`, or
+  `no_network=True`; PHP: `libxml_disable_entity_loader(true)` — every
+  XXE finding in that whole file is dropped, not just ones textually
+  near the marker. This is deliberately coarse: a real per-call,
+  taint-aware "is THIS specific parser instance safe" check would need
+  the same cross-line object-flow tracking the IDOR check above and the
+  AST taint engine do for their own sinks — a bigger lift than this
+  narrow false-positive fix justifies on its own. Known trade-off, same
+  honesty as everywhere else in this section: a file that uses an unsafe
+  parser for one XML input and a safe one for another will have its
+  genuine unsafe-parser finding wrongly suppressed too if any safe marker
+  appears anywhere in that same file. Accepted on purpose — a flood of
+  false positives on every file that merely imports `defusedxml` is a
+  far more common failure mode than that specific split-file shape, and
+  leaving it unfixed was actively misleading (flagmap was flagging
+  `defusedxml.ElementTree.fromstring(...)` — a call that exists
+  specifically to BE safe — identically to a raw, unguarded one).
+  Regression-tested as a matched pair per language (`vuln_sinks.*` has
+  an unguarded `ruleid` case, `clean_sinks.*` has the identical call
+  shape with the guard present, asserting `safe`) — and writing that
+  pair caught a real bug before release: the first draft's explanatory
+  code comments on the *unguarded* fixture cases literally said things
+  like "no `libxml_disable_entity_loader(true)` anywhere in this file",
+  which of course made that string appear in the file, which made the
+  guard fire and suppress the very finding the fixture existed to
+  assert — the exact same self-referential trap `loot.py`'s own
+  docstring fell into with its flag-shaped-string example a checkpoint
+  earlier. Fixed by rewording those comments to describe the absence
+  without quoting the literal marker text.
 
 ## What it can't catch (on purpose)
 
@@ -827,6 +870,7 @@ flagmap/
     idor.py                # best-effort missing-authorization/IDOR check (see "Best-effort heuristics")
     loot.py                # recon: exposed .git/.env/keys/flag-shaped strings (see "Loot / Recon")
     deps.py                # curated known-CVE pinned-dependency table + manifest/lockfile parsers (see "Vulnerable Dependencies")
+    xxe_guard.py            # whole-file XXE false-positive suppression (see "Best-effort heuristics")
     chains.py              # attack-path correlation over a scan's findings
     config_patterns.py    # the misconfiguration pattern database
     config_scanner.py      # file walking + checks (Dockerfile/nginx/.env/etc.)
@@ -959,7 +1003,7 @@ on the normal `python3` interpreter's path, is the reliable way to run it.
   from exactly this category, not from the "intended" vulnerability.
 - ~~Known-vulnerable pinned dependency versions (Log4Shell, SnakeYAML, old
   PHPMailer, Struts2, Rails, Django, lodash/minimist, Pillow/urllib3,
-  PyYAML, ...)~~ — added in v1.7.0 via `deps.py`, see "Vulnerable
+  PyYAML, ...)~~ — added in v1.8.0 via `deps.py`, see "Vulnerable
   Dependencies". Deliberately scoped to a small curated table of
   well-known, exact-version-only matches, not a general SCA tool against
   a live CVE/OSV database — the "What it can't catch" entry below still
@@ -1023,7 +1067,16 @@ on the normal `python3` interpreter's path, is the reliable way to run it.
   Handlebars/Nunjucks), XXE (DOMDocument/lxml parser config), and NoSQL
   Injection (MongoDB `find()`/`update()`/Mongoose) for the same AST
   taint-tracking treatment SQLi/SSRF/LDAP got, and deliberately held off
-  on all three for now: EJS's `render`/`compile` and Handlebars' `compile`
+  on all three at the time — XXE has since gotten a narrower, cheaper
+  fix instead of the full AST treatment (~~whole-file safe-parser-marker
+  suppression~~ — added in v1.9.0 via `xxe_guard.py`, see "Best-effort
+  heuristics" — chosen over full taint-tracking because the thing worth
+  fixing wasn't "is the parsed data tainted" (the XML body itself is the
+  attack payload, so it always is) but "was this specific parser
+  configured safely," which a one-call-one-sink taint model doesn't
+  represent any better than a whole-file marker check does, for
+  meaningfully more engineering cost). SSTI and NoSQL Injection remain
+  held off, for their original reasons: EJS's `render`/`compile` and Handlebars' `compile`
   either reuse Express's own extremely common `res.render(viewName, data)`
   method name (a much higher-traffic collision than anything accepted
   elsewhere in `SINKS`) or need a two-call correlation (`compile()` then
