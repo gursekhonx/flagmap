@@ -116,16 +116,21 @@ def _print_start_here(findings, chained_ids, use_color: bool, limit: int = 5):
         # "open this file" is a zero-effort, guaranteed-real win that
         # beats "go exploit this tainted sink" on time-value alone, every
         # time, even when both happen to carry the same severity label.
-        loot = 0 if getattr(f, "kind", "vuln") == "loot" else 1
+        # Loot ranks first (zero exploitation needed), known-CVE
+        # dependencies second (near-certain, but still needs an exploit
+        # to actually pop), everything else after that on its usual
+        # severity/confidence/chain-membership footing.
+        kind = getattr(f, "kind", "vuln")
+        tier = 0 if kind == "loot" else 1 if kind == "dep" else 2
         sev = SEVERITY_ORDER.get(f.severity, 3)
         conf = 0 if f.confidence == "likely" else 1
         chained = 0 if id(f) in chained_ids else 1
-        return (loot, chained, sev, conf)
+        return (tier, chained, sev, conf)
 
     top = sorted(findings, key=rank_key)[:limit]
     print(c("── Start Here ──", BOLD, use_color))
-    print(c("Highest-value findings first (loot, then severity + confidence + attack-chain membership).",
-            DIM, use_color))
+    print(c("Highest-value findings first (loot, then known-CVE deps, then severity + confidence + "
+            "attack-chain membership).", DIM, use_color))
     print()
     for i, f in enumerate(top, start=1):
         sev_tag = c(f"[{f.severity.upper()}/{f.confidence}]", SEVERITY_COLOR.get(f.severity, ""), use_color)
@@ -152,6 +157,7 @@ def print_report(findings, use_color: bool, show_payloads: bool = True, show_cha
         return
 
     loot_findings = [f for f in findings if getattr(f, "kind", "vuln") == "loot"]
+    dep_findings = [f for f in findings if getattr(f, "kind", "vuln") == "dep"]
     code_findings = [f for f in findings if getattr(f, "kind", "vuln") == "vuln"]
     config_findings = [f for f in findings if getattr(f, "kind", "vuln") == "misconfig"]
     chains = find_chains(findings) if show_chains else []
@@ -181,6 +187,16 @@ def print_report(findings, use_color: bool, show_payloads: bool = True, show_cha
         for f in loot_findings:
             grouped[f.vuln_name].append(f)
         _print_group(grouped, use_color, show_payloads, action_label="do")
+
+    if dep_findings:
+        print(c("── Vulnerable Dependencies ──", BOLD, use_color))
+        print(c("Exact pinned version matched a known CVE — see \"fix\" for the patched version.",
+                DIM, use_color))
+        print()
+        grouped = defaultdict(list)
+        for f in dep_findings:
+            grouped[f.vuln_name].append(f)
+        _print_group(grouped, use_color, show_payloads, action_label="fix")
 
     if code_findings:
         print(c("── Code Vulnerabilities ──", BOLD, use_color))

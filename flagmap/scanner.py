@@ -13,6 +13,7 @@ from .idor import find_idor_candidates, IDOR_LANGUAGES
 from .config_scanner import scan_config_path
 from .heredoc import iter_heredoc_sources
 from .loot import find_loot
+from .deps import find_vulnerable_deps
 from .ast_engine import scan_ast, AST_SUPPORTED_LANGUAGES
 
 # No hand-written vulnerable application code is ever a single line this long —
@@ -35,8 +36,9 @@ class Finding:
     why: str
     payload: str
     confidence: str
-    kind: str = "vuln"  # "vuln" (code vulnerability), "misconfig" (config file issue), or "loot"
-                        # (exposed secret/file needing zero exploitation — see loot.py)
+    kind: str = "vuln"  # "vuln" (code vulnerability), "misconfig" (config file issue), "loot"
+                        # (exposed secret/file needing zero exploitation — see loot.py), or "dep"
+                        # (known-CVE pinned dependency version — see deps.py)
 
 
 def detect_language(filename: str) -> Optional[str]:
@@ -283,6 +285,25 @@ def scan_path(root: str) -> List[Finding]:
             payload=lf.payload,
             confidence="likely",
             kind="loot",
+        ))
+
+    # separate pass: known-vulnerable pinned dependencies (Log4Shell,
+    # SnakeYAML, old PHPMailer, etc.) — see deps.py for the curated CVE
+    # table and exactly which manifests/lockfiles are parsed. Like loot
+    # findings, "likely" confidence: the version string itself is a fact
+    # about the exact code you were handed, not a probabilistic pattern
+    # match — the only judgment call was curating which CVEs to track.
+    for df in find_vulnerable_deps(root):
+        all_findings.append(Finding(
+            file=df.file,
+            line_no=df.line_no,
+            line_text=df.line_text,
+            vuln_name=f"Known-Vulnerable Dependency: {df.package}@{df.version} ({df.cve})",
+            severity=df.severity,
+            why=df.why,
+            payload=df.fix,
+            confidence="likely",
+            kind="dep",
         ))
 
     return all_findings

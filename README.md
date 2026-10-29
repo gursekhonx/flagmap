@@ -2,8 +2,9 @@
 
 A CLI tool that scans CTF challenge source code (PHP, Python, Node/JS, C#/
 ASP.NET Core, Java, Go, Ruby, Lua, Rust) and flags common web-exploitation
-vulnerability patterns, misconfigurations, and exposed secrets/loot
-(`.git`, flag-shaped strings, stray keys) — with a short explanation and a
+vulnerability patterns, misconfigurations, exposed secrets/loot (`.git`,
+flag-shaped strings, stray keys), and known-CVE pinned dependencies
+(Log4Shell, old PHPMailer, etc.) — with a short explanation and a
 suggested starting payload or action for each one. It also correlates
 findings into likely **attack chains** (e.g. an upload bug plus an Apache
 misconfig = RCE) and ranks a **"Start Here"** shortlist so you know what
@@ -450,6 +451,62 @@ depending on code this tool can't fully see), a `.git` folder or a
 flag-shaped string being present is not probabilistic: it's a fact about
 what's in the tarball you were just handed.
 
+**Vulnerable Dependencies** (`deps.py`, added v1.7.0) — a fourth category,
+printed in its own section between Loot/Recon and Code Vulnerabilities,
+and ranked second in "Start Here" (after loot, ahead of everything else):
+a package manifest or lockfile pins an *exact* version, and that exact
+version has a well-known CVE.
+
+This is deliberately **not** a general SCA (software composition
+analysis) tool — it doesn't call out to any live CVE/OSV database (that
+would mean network access to a service that's often rate-limited or paid,
+and would make results depend on what's reachable at scan time rather
+than being reproducible). Instead it ships a small, hand-curated,
+offline table (`CVE_TABLE` in `deps.py`) of CVEs that come up again and
+again specifically in CTF/training contexts:
+
+- **Log4Shell** and its three follow-on CVEs (`org.apache.logging.log4j:log4j-core` < 2.17.1, Java/`pom.xml`)
+- **SnakeYAML** unsafe-deserialization RCE (`org.yaml:snakeyaml` < 1.26 and < 1.31)
+- **PyYAML** unsafe `yaml.load()` RCE (`pyyaml` < 5.1)
+- **Old PHPMailer** — three chained CVEs across < 5.2.18 / < 5.2.22 / < 6.0.6
+  (`phpmailer/phpmailer`, PHP/`composer.lock`)
+- **Struts2** `CVE-2017-5638` — the Equifax-breach Content-Type OGNL RCE
+  (`org.apache.struts:struts2-core`, branch-aware: < 2.3.32 / < 2.5.10.1)
+- **Rails** `CVE-2020-8165` — Marshal-based cache-store deserialization RCE
+  (`rails`, branch-aware: < 5.2.4.3 / < 6.0.3.1)
+- **Django** `CVE-2022-28346` — `QuerySet` SQL injection (branch-aware
+  across the 2.2/3.2/4.0 lines)
+- **lodash** `CVE-2021-23337` (< 4.17.21) and **minimist** prototype
+  pollution (`CVE-2020-7598` < 1.2.3, `CVE-2021-44906` < 1.2.6)
+- **Pillow** `CVE-2022-22817` (< 9.0.0) and **urllib3** `CVE-2021-33503`
+  ReDoS (< 1.26.5)
+
+Parsed manifests/lockfiles: `requirements.txt` (exact `==` pins only —
+a range like `flask>=1.0` tells you nothing about what actually got
+installed, so it's skipped, never guessed at), `Pipfile.lock`,
+`package-lock.json` (npm v1 and v2/v3 shapes), `yarn.lock`,
+`Gemfile.lock`, `composer.lock`, and `pom.xml` (skipping any `<version>`
+that's actually an unresolved `${property}` placeholder — same
+never-guess rule). Each is parsed by regex/line-scanning rather than a
+full JSON/XML parse, same style as the rest of flagmap, so a partial or
+slightly malformed file still yields whatever lines do match and keeps a
+real line number, rather than an all-or-nothing exception.
+
+Self-tested on first attempt with zero false positives this time (unlike
+loot.py's self-caught docstring bug): running it against flagmap's own
+repo found only the matches inside its own test fixtures, nothing
+spurious from `setup.py`'s loose `>=` version ranges.
+
+Known limitation, stated plainly rather than glossed over: this table
+reflects what's well-known as of when it was written, nothing more. It
+will go stale, and it covers maybe a dozen CVEs out of the thousands that
+exist. Treat a clean result as "no *well-known* bad pin found", never as
+"this dependency tree is clean." Severities here are capped at `"high"` —
+flagmap's severity scale everywhere else only has three tiers
+(high/medium/low), and adding a fourth `"critical"` tier just for this
+check would have silently broken sort order in the CLI and in "Start
+Here" rather than doing anything useful.
+
 ## Install
 
 As of v1.3.0, flagmap depends on `tree-sitter` plus a grammar package for
@@ -681,12 +738,18 @@ one would either be a no-op or a false-positive generator:
   the first place — an LLM tool function's "access control" is prose in a
   system prompt the scanner never sees, so there's no code-level absence to
   even point at.
-- **Known-CVE'd pinned dependencies/base images** (e.g. `FROM traefik:v3.4.5`
-  shipping a public dashboard path-traversal CVE) — the vulnerable code
-  isn't in the challenge's own source at all, so no amount of pattern
-  coverage over *this* repo's files would ever see it. This needs a
-  CVE/OSV-style dependency-version lookup, a fundamentally different kind
-  of check than source-pattern matching.
+- **Known-CVE'd pinned dependencies/base images, beyond the curated table
+  in `deps.py`** (e.g. `FROM traefik:v3.4.5` shipping a public dashboard
+  path-traversal CVE, or any package/CVE pair not in `deps.py`'s hand-
+  picked list — see "Vulnerable Dependencies") — the vulnerable code isn't
+  in the challenge's own source at all, so no amount of pattern coverage
+  over *this* repo's files would ever see it, and `deps.py` only covers
+  manifests/lockfiles for 5 ecosystems against ~a dozen curated CVEs, not
+  container base images or the long tail of everything else. A *general*
+  version of this needs a live CVE/OSV-style dependency-version lookup
+  across every ecosystem and every base image — a fundamentally different
+  (and much more infrastructure-heavy) kind of check than the offline
+  curated table this tool ships instead.
 - **Pure logic/semantic confusion bugs** — e.g. a signature that's verified
   correctly over raw bytes, but the *meaning* of those bytes is then
   re-derived a different way (OCR, a different parser) than what was
@@ -763,6 +826,7 @@ flagmap/
     csrf.py                 # best-effort missing-CSRF form check
     idor.py                # best-effort missing-authorization/IDOR check (see "Best-effort heuristics")
     loot.py                # recon: exposed .git/.env/keys/flag-shaped strings (see "Loot / Recon")
+    deps.py                # curated known-CVE pinned-dependency table + manifest/lockfile parsers (see "Vulnerable Dependencies")
     chains.py              # attack-path correlation over a scan's findings
     config_patterns.py    # the misconfiguration pattern database
     config_scanner.py      # file walking + checks (Dockerfile/nginx/.env/etc.)
@@ -806,6 +870,23 @@ the set listed — not "at least these", so a stray new false positive
 (like `loot.py`'s own docstring once tripping its own flag-shaped-string
 check during development) fails the suite just as loudly as a missed
 true positive would.
+
+`deps.py` reuses the exact same `EXPECTED.txt` + `app/` convention under
+`tests/fixtures/deps/<case>/`, for the same reason (a manifest/lockfile
+match has a file and a line, but there's no source-code "line of code" to
+hang a `ruleid`/`safe` marker on in the usual sense) — except the
+expected strings are `find_vulnerable_deps()`'s own `package@version
+(CVE)` text, not the fuller `"Known-Vulnerable Dependency: ..."` string
+`scanner.py` wraps it in for display, keeping the fixture's expectations
+pinned to `deps.py`'s own output rather than to how another module
+happens to format it. `case1` exercises all 7 parsers in one pass
+(`requirements.txt`, `Pipfile.lock`, `package-lock.json`, `yarn.lock`,
+`Gemfile.lock`, `composer.lock`, `pom.xml`) plus three deliberate
+false-positive guards: a loose `requests>=2.0` range (must be skipped,
+not guessed at), a `pom.xml` dependency pinned to a `${property}`
+placeholder (same), and a handful of packages/versions with no CVE_TABLE
+entry at all (`flask`, `express`, `monolog/monolog`, etc. — must produce
+nothing).
 
 Do **not** run this (or anything else in the repo) from inside a stale venv
 with an old editable install of flagmap sitting in it — that shadows the
@@ -876,14 +957,13 @@ on the normal `python3` interpreter's path, is the reliable way to run it.
   incremental extension of the taint-tracking/pattern-matching approach —
   worth having because in practice a meaningful share of CTF points come
   from exactly this category, not from the "intended" vulnerability.
-- Known-vulnerable pinned dependency versions (Log4Shell, SnakeYAML, a
-  stale PyYAML/lodash/Pillow/urllib3, ...) — the "What it can't catch"
-  entry for this is still accurate about the general case (arbitrary
-  CVE/OSV-style lookups across every ecosystem is a different kind of
-  check entirely), but a small, curated, high-confidence table of the
-  CVEs that show up again and again in CTF "vulnerable dependency"
-  challenges specifically is a much more tractable slice of that problem
-  — in progress.
+- ~~Known-vulnerable pinned dependency versions (Log4Shell, SnakeYAML, old
+  PHPMailer, Struts2, Rails, Django, lodash/minimist, Pillow/urllib3,
+  PyYAML, ...)~~ — added in v1.7.0 via `deps.py`, see "Vulnerable
+  Dependencies". Deliberately scoped to a small curated table of
+  well-known, exact-version-only matches, not a general SCA tool against
+  a live CVE/OSV database — the "What it can't catch" entry below still
+  applies to that broader, harder version of the problem.
 - ~~LDAP Injection~~ — added in v1.4.0 for Python/PHP/Java (see
   "Architecture" and "What it catches"); Node/Ruby intentionally skipped,
   their LDAP libraries put the filter inside an options/hash argument

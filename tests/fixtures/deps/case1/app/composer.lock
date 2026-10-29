@@ -1,0 +1,25 @@
+{
+    "_readme": [
+        "This file locks the dependencies of your project to a known state"
+    ],
+    "packages": [
+        {
+            "name": "phpmailer/phpmailer",
+            "version": "v5.2.10",
+            "source": {
+                "type": "git"
+            },
+            "require": {
+                "php": ">=5.0.0"
+            }
+        },
+        {
+            "name": "monolog/monolog",
+            "version": "2.3.5",
+            "require": {
+                "php": ">=7.2"
+            }
+        }
+    ],
+    "packages-dev": []
+}
