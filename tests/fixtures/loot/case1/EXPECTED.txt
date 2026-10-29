@@ -1,0 +1,6 @@
+Exposed .env file
+Exposed .git directory
+Backup file present
+Hardcoded flag-shaped string
+Exposed private key material
+Database dump file present

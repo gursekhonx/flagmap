@@ -79,7 +79,11 @@ def _print_group(grouped, use_color: bool, show_payloads: bool, action_label: st
               + c(f"  ({len(items)} match{plural})", DIM, use_color))
         for f in items:
             sev_tag = c(f"[{f.severity.upper()}/{f.confidence}]", SEVERITY_COLOR.get(f.severity, ""), use_color)
-            loc = c(f"{f.file}:{f.line_no}", CYAN, use_color)
+            # line_no 0 means "this finding is about the file/directory
+            # itself, not one line in it" (loot.py's presence checks —
+            # a .git folder or a leftover .env file don't have a "line").
+            loc_text = f.file if f.line_no == 0 else f"{f.file}:{f.line_no}"
+            loc = c(loc_text, CYAN, use_color)
             print(f"  {sev_tag} {loc}")
             print(f"    {DIM if use_color else ''}{f.line_text}{RESET if use_color else ''}")
             print(f"    why:  {f.why}")
@@ -108,19 +112,25 @@ def _print_start_here(findings, chained_ids, use_color: bool, limit: int = 5):
         return
 
     def rank_key(f):
+        # Loot findings rank absolutely first, regardless of severity —
+        # "open this file" is a zero-effort, guaranteed-real win that
+        # beats "go exploit this tainted sink" on time-value alone, every
+        # time, even when both happen to carry the same severity label.
+        loot = 0 if getattr(f, "kind", "vuln") == "loot" else 1
         sev = SEVERITY_ORDER.get(f.severity, 3)
         conf = 0 if f.confidence == "likely" else 1
         chained = 0 if id(f) in chained_ids else 1
-        return (chained, sev, conf)
+        return (loot, chained, sev, conf)
 
     top = sorted(findings, key=rank_key)[:limit]
     print(c("── Start Here ──", BOLD, use_color))
-    print(c("Highest-value findings first (severity + confidence + whether they're part of a detected chain).",
+    print(c("Highest-value findings first (loot, then severity + confidence + attack-chain membership).",
             DIM, use_color))
     print()
     for i, f in enumerate(top, start=1):
         sev_tag = c(f"[{f.severity.upper()}/{f.confidence}]", SEVERITY_COLOR.get(f.severity, ""), use_color)
-        loc = c(f"{f.file}:{f.line_no}", CYAN, use_color)
+        loc_text = f.file if f.line_no == 0 else f"{f.file}:{f.line_no}"
+        loc = c(loc_text, CYAN, use_color)
         tag = c("  (part of an attack chain)", MAGENTA, use_color) if id(f) in chained_ids else ""
         print(f"  {i}. {sev_tag} {f.vuln_name} — {loc}{tag}")
     print()
@@ -141,6 +151,7 @@ def print_report(findings, use_color: bool, show_payloads: bool = True, show_cha
         print()
         return
 
+    loot_findings = [f for f in findings if getattr(f, "kind", "vuln") == "loot"]
     code_findings = [f for f in findings if getattr(f, "kind", "vuln") == "vuln"]
     config_findings = [f for f in findings if getattr(f, "kind", "vuln") == "misconfig"]
     chains = find_chains(findings) if show_chains else []
@@ -160,6 +171,16 @@ def print_report(findings, use_color: bool, show_payloads: bool = True, show_cha
     print(f" {len(findings)} finding(s) across {n_classes} class(es)  [{sev_summary}]{chain_note}")
     print(_rule(use_color))
     print()
+
+    if loot_findings:
+        print(c("── Loot / Recon ──", BOLD, use_color))
+        print(c("Needs zero exploitation — just open the file. Check this before anything else below.",
+                DIM, use_color))
+        print()
+        grouped = defaultdict(list)
+        for f in loot_findings:
+            grouped[f.vuln_name].append(f)
+        _print_group(grouped, use_color, show_payloads, action_label="do")
 
     if code_findings:
         print(c("── Code Vulnerabilities ──", BOLD, use_color))

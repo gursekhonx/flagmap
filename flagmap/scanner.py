@@ -12,6 +12,7 @@ from .csrf import find_missing_csrf
 from .idor import find_idor_candidates, IDOR_LANGUAGES
 from .config_scanner import scan_config_path
 from .heredoc import iter_heredoc_sources
+from .loot import find_loot
 from .ast_engine import scan_ast, AST_SUPPORTED_LANGUAGES
 
 # No hand-written vulnerable application code is ever a single line this long —
@@ -34,7 +35,8 @@ class Finding:
     why: str
     payload: str
     confidence: str
-    kind: str = "vuln"  # "vuln" (code vulnerability) or "misconfig" (config file issue)
+    kind: str = "vuln"  # "vuln" (code vulnerability), "misconfig" (config file issue), or "loot"
+                        # (exposed secret/file needing zero exploitation — see loot.py)
 
 
 def detect_language(filename: str) -> Optional[str]:
@@ -259,5 +261,28 @@ def scan_path(root: str) -> List[Finding]:
     # .env, vsftpd.conf, etc.) — these aren't "source code" so they're not
     # covered by the language-extension walk above.
     all_findings.extend(scan_config_path(root))
+
+    # separate pass: loot/recon — exposed .git, leftover .env/.bak files,
+    # hardcoded flag-shaped strings, stray private keys. Deliberately its
+    # own walk (see loot.py) since it needs to look at files/directories
+    # (.git chief among them) every other pass here intentionally skips.
+    # Always "high" severity / "likely" confidence: unlike a tainted-sink
+    # match, a `.git` folder or a literal flag string being present in the
+    # tarball you were just handed isn't a probabilistic pattern — it's
+    # a fact about this exact file, and the next action it suggests
+    # ("open the file", "run git log") needs no further verification to
+    # be worth doing right now.
+    for lf in find_loot(root):
+        all_findings.append(Finding(
+            file=lf.file,
+            line_no=lf.line_no,
+            line_text=lf.line_text,
+            vuln_name=lf.vuln_name,
+            severity="high",
+            why=lf.why,
+            payload=lf.payload,
+            confidence="likely",
+            kind="loot",
+        ))
 
     return all_findings

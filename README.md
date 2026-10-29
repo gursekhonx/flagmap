@@ -2,10 +2,12 @@
 
 A CLI tool that scans CTF challenge source code (PHP, Python, Node/JS, C#/
 ASP.NET Core, Java, Go, Ruby, Lua, Rust) and flags common web-exploitation
-vulnerability patterns — with a short explanation and a suggested starting
-payload for each one. It also correlates findings into likely **attack
-chains** (e.g. an upload bug plus an Apache misconfig = RCE) and ranks a
-**"Start Here"** shortlist so you know what to try first.
+vulnerability patterns, misconfigurations, and exposed secrets/loot
+(`.git`, flag-shaped strings, stray keys) — with a short explanation and a
+suggested starting payload or action for each one. It also correlates
+findings into likely **attack chains** (e.g. an upload bug plus an Apache
+misconfig = RCE) and ranks a **"Start Here"** shortlist so you know what
+to try first.
 
 Built for jeopardy-style CTFs (like CyberSci regionals) where web challenges
 sometimes hand you the source code. Instead of eyeballing every file, point
@@ -403,6 +405,51 @@ vsftpd.conf, redis.conf, my.cnf, php.ini, sshd_config, Kubernetes manifests):
 This list keeps growing — see "Extending it" below, and the project's commit
 history for real CyberSci challenges this was tested against.
 
+**Loot / Recon** (`loot.py`, added v1.7.0) — printed in its own section,
+*before* Code Vulnerabilities, and ranked first in "Start Here" regardless
+of severity, because every one of these needs zero exploitation: the
+action is "open the file" or "run one git command", not "find and trigger
+a bug". A category genuinely distinct from both "code vulnerability" and
+"misconfiguration" — these are packaging mistakes in how the challenge
+source itself was handed out, not bugs in the challenge's logic:
+
+- **Exposed `.git` directory** — `scanner.py`'s main source walk and
+  `config_scanner.py`'s walk both deliberately skip `.git` (noise for "scan
+  the code for bugs"), but that's exactly the signal here: `loot.py` does
+  its own separate walk that doesn't skip it, flags its mere presence, and
+  suggests `git log -p --all` / `git show --all` directly — deleted files,
+  old credentials, and a pre-swap flag are all common finds this way.
+- **Exposed `.env` file**, **`.htpasswd`**, **SSH private keys**
+  (`id_rsa`/`id_dsa`/`id_ecdsa`/`id_ed25519`, by exact filename) — presence
+  alone is the finding.
+- **Backup/editor-leftover files** (`.bak`, `~`, `.swp`, `.orig`) — often
+  served as raw, unexecuted source if the extension was never blocked at
+  the web server, and even just in a source handout worth diffing against
+  the real file for anything redacted.
+- **Loose database dump files** (`.sql`, `.sqlite`, `.sqlite3`) — likely
+  real table data: user records, password hashes, sometimes the flag
+  itself.
+- **Hardcoded flag-shaped strings** (`flag{...}`/`CTF{...}` and
+  case variants, requiring real alphanumeric content inside the braces —
+  tightened after this check, run against flagmap's own source during
+  development, flagged its own docstring's illustrative `flag{...}`
+  example) — scanned across every file in the tree, not just recognized
+  source-code extensions, since a stray flag left in a `.txt`/`.md`/`.log`
+  file is just as real a find as one left in `.py`.
+- **PEM-format private key material** and **AWS access key IDs**
+  (`AKIA[0-9A-Z]{16}`) embedded directly in any file's content — the two
+  content-based checks kept deliberately narrow (see `loot.py`'s module
+  docstring for why a broader "any secret-looking string" check was left
+  out: that's the existing hardcoded-credential regex's job for
+  recognized source files, and a weaker duplicate of it here would just
+  be noise).
+
+Every finding here carries `"likely"` confidence, not `"possible"` —
+unlike a tainted-sink match (a pattern that *might* be exploitable
+depending on code this tool can't fully see), a `.git` folder or a
+flag-shaped string being present is not probabilistic: it's a fact about
+what's in the tarball you were just handed.
+
 ## Install
 
 As of v1.3.0, flagmap depends on `tree-sitter` plus a grammar package for
@@ -715,6 +762,7 @@ flagmap/
     heredoc.py             # pulls source embedded in Dockerfile heredocs back out for scanning
     csrf.py                 # best-effort missing-CSRF form check
     idor.py                # best-effort missing-authorization/IDOR check (see "Best-effort heuristics")
+    loot.py                # recon: exposed .git/.env/keys/flag-shaped strings (see "Loot / Recon")
     chains.py              # attack-path correlation over a scan's findings
     config_patterns.py    # the misconfiguration pattern database
     config_scanner.py      # file walking + checks (Dockerfile/nginx/.env/etc.)
@@ -747,6 +795,17 @@ Each fixture file is both documentation of a known-good/known-bad shape and
 a standing assertion that it keeps behaving that way. Add a `ruleid`/`safe`
 line whenever a new sink, source, or false-positive guard is added, so the
 next change can't silently regress it without the suite catching it.
+
+`loot.py` gets its own convention under `tests/fixtures/loot/<case>/`,
+since a whole-directory presence check (a `.git` folder, a leftover
+`.env` file) has no single line to put a `ruleid`/`safe` comment on:
+each case folder holds an `EXPECTED.txt` (one `vuln_name` per line) next
+to an `app/` subfolder that's the actual tree to scan, and the harness
+asserts the set of categories `find_loot()` reports on `app/` is *exactly*
+the set listed — not "at least these", so a stray new false positive
+(like `loot.py`'s own docstring once tripping its own flag-shaped-string
+check during development) fails the suite just as loudly as a missed
+true positive would.
 
 Do **not** run this (or anything else in the repo) from inside a stale venv
 with an old editable install of flagmap sitting in it — that shadows the
@@ -811,6 +870,20 @@ on the normal `python3` interpreter's path, is the reliable way to run it.
 - ~~AST-based matching per language instead of regex~~ — done for all 8
   supported languages: Python/JS/PHP in v1.0.0, Go in v1.1.0, Java/Ruby in
   v1.2.0, Lua/Rust in v1.3.0 (see "Architecture").
+- ~~Loot/recon scanning (exposed `.git`, hardcoded flags, stray keys,
+  backup files)~~ — added in v1.7.0, see "Loot / Recon". A genuinely
+  different kind of check than everything else in flagmap, not an
+  incremental extension of the taint-tracking/pattern-matching approach —
+  worth having because in practice a meaningful share of CTF points come
+  from exactly this category, not from the "intended" vulnerability.
+- Known-vulnerable pinned dependency versions (Log4Shell, SnakeYAML, a
+  stale PyYAML/lodash/Pillow/urllib3, ...) — the "What it can't catch"
+  entry for this is still accurate about the general case (arbitrary
+  CVE/OSV-style lookups across every ecosystem is a different kind of
+  check entirely), but a small, curated, high-confidence table of the
+  CVEs that show up again and again in CTF "vulnerable dependency"
+  challenges specifically is a much more tractable slice of that problem
+  — in progress.
 - ~~LDAP Injection~~ — added in v1.4.0 for Python/PHP/Java (see
   "Architecture" and "What it catches"); Node/Ruby intentionally skipped,
   their LDAP libraries put the filter inside an options/hash argument

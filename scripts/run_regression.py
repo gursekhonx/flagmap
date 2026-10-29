@@ -32,8 +32,20 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from flagmap.scanner import scan_path  # noqa: E402
+from flagmap.loot import find_loot  # noqa: E402
 
 FIXTURES_DIR = os.path.join(os.path.dirname(__file__), "..", "tests", "fixtures")
+
+# tests/fixtures/loot/<case>/ each hold an EXPECTED.txt (one vuln_name per
+# line) and an app/ subfolder that's the actual tree to scan — a whole-
+# directory-presence check like find_loot() has no single "line" to put a
+# ruleid/safe marker comment on, so it gets its own assertion convention:
+# the SET of vuln_names found in app/ must equal EXACTLY the SET listed in
+# EXPECTED.txt, no more and no fewer. Exact-equality (not "at least these")
+# is deliberate: it catches a stray new false positive (like loot.py's own
+# docstring once tripping its own flag-shaped-string regex during
+# development) just as readily as a missed true positive.
+LOOT_FIXTURES_DIR = os.path.join(FIXTURES_DIR, "loot")
 
 _MARKER_RE = re.compile(r"""(?:\#|//|--)\s*(ruleid|safe)\s*:?\s*(.*?)\s*$""")
 
@@ -112,6 +124,30 @@ def run_fixture(path, verbose=False):
     return passed, failed, failure_lines
 
 
+def run_loot_fixture(case_dir):
+    """Returns (n_passed, n_failed, failure_lines) for one tests/fixtures/
+    loot/<case>/ directory — see LOOT_FIXTURES_DIR's comment above for the
+    exact-set-equality convention this checks."""
+    expected_path = os.path.join(case_dir, "EXPECTED.txt")
+    app_dir = os.path.join(case_dir, "app")
+    with open(expected_path, encoding="utf-8") as f:
+        expected = {line.strip() for line in f if line.strip()}
+
+    findings = find_loot(app_dir)
+    actual = {f.vuln_name for f in findings}
+
+    if actual == expected:
+        return 1, 0, []
+    missing = expected - actual
+    extra = actual - expected
+    lines = []
+    if missing:
+        lines.append(f"  missing: {sorted(missing)}")
+    if extra:
+        lines.append(f"  unexpected: {sorted(extra)}")
+    return 0, 1, lines
+
+
 def main():
     verbose = "-v" in sys.argv
     total_passed, total_failed = 0, 0
@@ -119,7 +155,7 @@ def main():
 
     for lang in sorted(os.listdir(FIXTURES_DIR)):
         lang_dir = os.path.join(FIXTURES_DIR, lang)
-        if not os.path.isdir(lang_dir):
+        if not os.path.isdir(lang_dir) or lang_dir == LOOT_FIXTURES_DIR:
             continue
         for fname in sorted(os.listdir(lang_dir)):
             fpath = os.path.join(lang_dir, fname)
@@ -131,6 +167,22 @@ def main():
             status = "PASS" if failed == 0 else "FAIL"
             if failed or verbose:
                 print(f"[{status}] {lang}/{fname}  ({passed} ok, {failed} failed)")
+            if failure_lines:
+                any_failures = True
+                for fl in failure_lines:
+                    print(fl)
+
+    if os.path.isdir(LOOT_FIXTURES_DIR):
+        for case in sorted(os.listdir(LOOT_FIXTURES_DIR)):
+            case_dir = os.path.join(LOOT_FIXTURES_DIR, case)
+            if not os.path.isfile(os.path.join(case_dir, "EXPECTED.txt")):
+                continue
+            passed, failed, failure_lines = run_loot_fixture(case_dir)
+            total_passed += passed
+            total_failed += failed
+            status = "PASS" if failed == 0 else "FAIL"
+            if failed or verbose:
+                print(f"[{status}] loot/{case}  ({passed} ok, {failed} failed)")
             if failure_lines:
                 any_failures = True
                 for fl in failure_lines:
