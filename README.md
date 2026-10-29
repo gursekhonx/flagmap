@@ -554,29 +554,54 @@ flagmap ./challenge_source --no-color
 # skip the attack-chain correlation and/or the Start Here shortlist
 flagmap ./challenge_source --no-chains --no-start-here
 
+# also write a shareable Markdown writeup (e.g. to paste/drop for your team)
+flagmap ./challenge_source --export-md report.md
+
 # print the installed version
 flagmap --version
 ```
 
-Output is split into up to four sections:
+Output is split into up to six sections (plus `--export-md`, which renders
+the same findings/chains as a standalone Markdown file alongside whatever
+else you asked for — see "Sharing results with a team" below):
 
-1. **Code Vulnerabilities** — exploitable bugs in the app's source, each
+1. **Loot / Recon** — exposed `.git`, `.env`/keys, backup files, hardcoded
+   flag-shaped strings. Needs zero exploitation, so it's printed first and
+   ranked first in "Start Here" regardless of severity. See "Loot / Recon".
+2. **Vulnerable Dependencies** — a manifest/lockfile pins an exact version
+   with a well-known CVE (Log4Shell, old PHPMailer, ...), each with a
+   suggested upgrade under `fix:`. Ranked second in "Start Here", after
+   loot. See "Vulnerable Dependencies".
+3. **Code Vulnerabilities** — exploitable bugs in the app's source, each
    with a suggested payload under `try:`.
-2. **Misconfigurations** — infra/config issues like a Dockerfile running as
+4. **Misconfigurations** — infra/config issues like a Dockerfile running as
    root or a wildcard CORS origin, each with a suggested remediation under
    `fix:`. This scan runs automatically alongside the code scan — no
    separate flag needed.
-3. **Attack Chains** — findings correlated into a likely exploit path (e.g.
+5. **Attack Chains** — findings correlated into a likely exploit path (e.g.
    an upload bug + a dangerous Apache `AddType` = direct RCE, or a root
    container + any RCE primitive = no privilege-escalation step needed).
    This is a plain co-occurrence check over the findings already produced —
    not new scanning or dataflow analysis — so treat a chain like any other
    `possible`-confidence finding: a strong hint of where to look first, not
    a guarantee the path is real. See `chains.py`.
-4. **Start Here** — a ranked shortlist of the 3-5 highest-value findings,
-   prioritizing anything that's part of a detected attack chain, then by
-   severity, then by confidence. Built for the moment you open a report and
-   just want to know what to click on first.
+6. **Start Here** — a ranked shortlist of the 3-5 highest-value findings:
+   loot first, then known-CVE dependencies, then everything else by
+   attack-chain membership, severity, and confidence. Built for the moment
+   you open a report and just want to know what to click on first.
+
+### Sharing results with a team (`--export-md`, added v1.9.0)
+
+`--export-md FILE` renders the exact same findings and chains as a
+standalone `.md` file (`report_md.py`) — same sections, same grouping,
+same "Start Here" ranking, just Markdown instead of ANSI-colored terminal
+text — in addition to whatever the normal run already prints (works
+alongside `--json` too; they're independent outputs from the same scan).
+Built because CyberSci and most jeopardy CTFs are played in teams, usually
+over Discord/Slack, under a clock: the person who ran flagmap is rarely
+the only one who needs the results, and reading them off a terminal means
+re-describing them by hand in chat. This makes "paste it in Discord" or
+"drop it in the team's shared doc" a straight file hand-off instead.
 
 ## How it decides what to flag
 
@@ -871,6 +896,7 @@ flagmap/
     loot.py                # recon: exposed .git/.env/keys/flag-shaped strings (see "Loot / Recon")
     deps.py                # curated known-CVE pinned-dependency table + manifest/lockfile parsers (see "Vulnerable Dependencies")
     xxe_guard.py            # whole-file XXE false-positive suppression (see "Best-effort heuristics")
+    report_md.py            # standalone Markdown report renderer (--export-md, see "Sharing results with a team")
     chains.py              # attack-path correlation over a scan's findings
     config_patterns.py    # the misconfiguration pattern database
     config_scanner.py      # file walking + checks (Dockerfile/nginx/.env/etc.)
@@ -931,6 +957,16 @@ not guessed at), a `pom.xml` dependency pinned to a `${property}`
 placeholder (same), and a handful of packages/versions with no CVE_TABLE
 entry at all (`flask`, `express`, `monolog/monolog`, etc. — must produce
 nothing).
+
+`report_md.py` deliberately has no fixture category of its own: it's a
+pure renderer over `Finding`/`Chain` objects the regression suite above
+already exercises and validates, with no detection logic of its own to
+regress — the risk there is a rendering bug (bad Markdown, a crash on
+empty findings), not a wrong finding, so it's covered by manual CLI
+smoke-testing during development (`--export-md` against a populated
+scan, an empty-findings scan, and alongside `--json`) rather than a
+fourth `EXPECTED.txt`-style convention that would just be asserting the
+same findings all over again under a different name.
 
 Do **not** run this (or anything else in the repo) from inside a stale venv
 with an old editable install of flagmap sitting in it — that shadows the
@@ -1099,7 +1135,11 @@ on the normal `python3` interpreter's path, is the reliable way to run it.
   used only as a key into a fixed allowlist dict)
 - A `--diff` mode to scan only files changed vs. a git baseline, for when
   challenge authors release a patched version
-- Export findings straight into a writeup template
+- ~~Export findings straight into a writeup template~~ — added in v1.9.0
+  via `--export-md`/`report_md.py`, see "Sharing results with a team".
+  Renders the exact same findings/chains print_report() already computes,
+  just as Markdown instead of terminal text, so there's no second
+  detection code path to keep in sync — only a second renderer.
 - Absence-of-authorization-check heuristics (IDOR / missing access control
   on an identity-shaped route parameter) — flagged in testing as a real,
   recurring miss, but needs a scanner-level check rather than a line regex

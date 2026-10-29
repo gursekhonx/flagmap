@@ -11,6 +11,7 @@ from collections import defaultdict
 from . import __version__
 from .scanner import scan_path, Finding
 from .chains import find_chains
+from .report_md import render_markdown
 
 SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2}
 SEVERITY_COLOR = {"high": "\033[91m", "medium": "\033[93m", "low": "\033[94m"}
@@ -247,6 +248,12 @@ def build_parser():
         default="possible",
         help="Minimum confidence to include (default: possible, i.e. show everything)",
     )
+    parser.add_argument(
+        "--export-md",
+        metavar="FILE",
+        help="Also write the report as a standalone Markdown file (for sharing with a team), "
+             "in addition to the normal terminal/--json output",
+    )
     parser.add_argument("--version", action="version", version=f"flagmap {__version__}")
     return parser
 
@@ -289,6 +296,16 @@ def main(argv=None):
             show_start_here=not args.no_start_here,
             scanned_path=args.path,
         )
+
+    if args.export_md:
+        md_chains = [] if args.no_chains else find_chains(findings)
+        try:
+            with open(args.export_md, "w", encoding="utf-8") as f:
+                f.write(render_markdown(findings, md_chains, args.path))
+        except OSError as e:
+            print(f"error: couldn't write --export-md file: {e}", file=sys.stderr)
+            return 1
+        print(f"Markdown report written to {args.export_md}", file=sys.stderr)
 
     return 0
 
