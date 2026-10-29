@@ -131,6 +131,15 @@ CVE_TABLE = {
                     "attacker-controlled URL string.",
              "fix": "Upgrade to urllib3>=1.26.5."},
         ],
+        "reportlab": [
+            {"min_version": None, "fixed_in": "3.6.13", "cve": "CVE-2023-33733", "severity": "high",
+             "why": "Paragraph()'s mini-markup parser lets a crafted `color` attribute (e.g. on a <font> tag) "
+                    "escape the rl_safe_eval() sandbox entirely — arbitrary code execution, not just markup "
+                    "injection, triggered purely by text that reaches Paragraph() with no other bug needed.",
+             "fix": "Upgrade to reportlab>=3.6.13. Still worth not passing untrusted text straight into "
+                    "Paragraph() at all afterward — see the \"ReportLab Paragraph Injection\" finding in "
+                    "\"What it catches\" for the app-code side of this."},
+        ],
         "django": [
             {"min_version": "2.2", "fixed_in": "2.2.28", "cve": "CVE-2022-28346", "severity": "high",
              "why": "QuerySet.annotate()/aggregate()/extra() can be used for SQL injection via a "

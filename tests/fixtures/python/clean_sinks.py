@@ -2,6 +2,7 @@ import os
 import sqlite3
 import ldap
 import defusedxml.ElementTree as etree
+from reportlab.platypus import Paragraph
 from urllib.request import urlopen
 from flask import Flask, request, redirect
 
@@ -61,3 +62,11 @@ def xxe_safe():
     # which makes this specific "etree" safe by construction.
     data = request.data
     return str(etree.fromstring(data))  # safe: XML External Entity (XXE)
+
+
+@app.route("/pdf_safe")
+def pdf_safe():
+    # fixed, non-tainted text — exactly the call shape the ReportLab
+    # Paragraph Injection check matches on, just with nothing attacker-
+    # controlled reaching it.
+    return str(Paragraph("Static Report Title", None))  # safe: ReportLab Paragraph Injection (CVE-2023-33733)

@@ -199,6 +199,18 @@ Ruby/Rails, Lua, Rust):
   markers (`defusedxml`, `resolve_entities=False`,
   `libxml_disable_entity_loader(true)`); see `xxe_guard.py` and
   "Best-effort heuristics" below
+- ReportLab Paragraph Injection (added v1.11.0, Python) —
+  `reportlab.platypus.Paragraph(text, style)` fed a tainted `text` value,
+  either cross-line via the AST taint engine or same-line via a regex
+  backstop. Not a generic "templating" bug like SSTI above: ReportLab
+  parses `Paragraph()`'s text as its own mini-markup language no matter
+  what (`<font color="...">`, `<a>`, `<img>`, ...), and on
+  `reportlab<=3.6.12` a crafted `color` attribute escapes the library's
+  `rl_safe_eval()` sandbox for outright RCE (CVE-2023-33733) — also
+  tracked as a known-vulnerable dependency, see "Vulnerable
+  Dependencies". Added after a real PDF-generator CTF challenge (title/
+  content/section fields piped straight into `Paragraph()`) came back
+  with zero findings from flagmap despite this being the intended bug.
 - Open Redirect (`header("Location: ".$_GET...)`, Flask `redirect()`, Express
   `res.redirect()` from request data)
 - NoSQL Injection (MongoDB `find()`/`update()` with the whole filter taken
@@ -484,6 +496,11 @@ again specifically in CTF/training contexts:
   pollution (`CVE-2020-7598` < 1.2.3, `CVE-2021-44906` < 1.2.6)
 - **Pillow** `CVE-2022-22817` (< 9.0.0) and **urllib3** `CVE-2021-33503`
   ReDoS (< 1.26.5)
+- **ReportLab** `CVE-2023-33733` (< 3.6.13, added v1.11.0) — the same
+  `rl_safe_eval()` sandbox-escape RCE the "ReportLab Paragraph Injection"
+  app-code check above is named after; this entry catches it from the
+  pinned-version side even in a file where the app code itself looks
+  fine at a glance.
 
 Parsed manifests/lockfiles: `requirements.txt` (exact `==` pins only —
 a range like `flask>=1.0` tells you nothing about what actually got
@@ -1044,6 +1061,16 @@ on the normal `python3` interpreter's path, is the reliable way to run it.
   well-known, exact-version-only matches, not a general SCA tool against
   a live CVE/OSV database — the "What it can't catch" entry below still
   applies to that broader, harder version of the problem.
+- ~~ReportLab Paragraph Injection (CVE-2023-33733)~~ — added in v1.11.0:
+  an AST taint-engine sink (`Paragraph`), a same-line regex backstop, and
+  a `deps.py` CVE_TABLE entry, all at once. Not something this roadmap
+  anticipated — found by running flagmap against a real user-submitted
+  CyberSci-style challenge (a Flask PDF-generator app piping `title`/
+  `content`/section fields straight into `reportlab.platypus.Paragraph()`)
+  that came back with zero findings despite that being the intended bug.
+  Worth naming as a reminder of where new coverage ideas actually come
+  from in practice: real challenges run through the tool, not just
+  brainstorming from a list of "vuln classes that exist."
 - ~~LDAP Injection~~ — added in v1.4.0 for Python/PHP/Java (see
   "Architecture" and "What it catches"); Node/Ruby intentionally skipped,
   their LDAP libraries put the filter inside an options/hash argument

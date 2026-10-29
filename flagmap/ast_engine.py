@@ -291,6 +291,24 @@ SINKS = {
         # The regex layer (patterns.py) still independently covers
         # requests.get/post/etc. same-line and bare-variable SSRF.
         "urlopen": ("SSRF (Server-Side Request Forgery)", "arg0", "tainted"),
+        # reportlab.platypus.Paragraph(text, style) — `text` isn't plain
+        # text, it's parsed by ReportLab's OWN mini-markup language
+        # (supports <b>, <i>, <font color="...">, <a href="...">, <img
+        # src="...">, ...), and versions <=3.6.12 let a crafted `color`
+        # (or certain other) attribute value escape the `rl_safe_eval`
+        # "sandbox" entirely for arbitrary code execution (CVE-2023-33733
+        # — a bypass of an earlier, same-shaped 2019 sandbox escape in the
+        # same code). Flagged as a distinctive sink the moment a non-
+        # literal value reaches it at all: unlike render_template_string
+        # (where *some* uses are the intended templating feature),
+        # passing a tainted value straight into Paragraph() is close to
+        # always a bug in a PDF-generator app specifically because the
+        # text is meant to be inert content, not markup the caller
+        # intended to be interpreted. Added after a real CyberSci-style
+        # challenge (a title/content/section PDF generator) tested
+        # against flagmap came back clean despite this being the
+        # intended bug — see README's "What it catches".
+        "Paragraph": ("ReportLab Paragraph Injection (CVE-2023-33733)", "arg0", "tainted"),
     },
     "js": {
         "query": ("SQL Injection", "arg0", "tainted"),

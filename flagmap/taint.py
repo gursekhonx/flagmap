@@ -142,6 +142,7 @@ SEVERITY_BY_VULN = {
     "Format String Injection": "high",
     "LDAP Injection": "high",
     "SSRF (Server-Side Request Forgery)": "high",
+    "ReportLab Paragraph Injection (CVE-2023-33733)": "high",
 }
 
 WHY_BY_VULN = {
@@ -169,6 +170,14 @@ WHY_BY_VULN = {
                                            "URL for an outbound request here — the server can be made to fetch "
                                            "internal/cloud-metadata URLs or scan the internal network on the "
                                            "attacker's behalf.",
+    "ReportLab Paragraph Injection (CVE-2023-33733)": "Variable assigned from user input earlier in the file is "
+        "passed straight into reportlab.platypus.Paragraph() here. Paragraph() parses its text argument as "
+        "ReportLab's own mini-markup language (<b>, <font color=\"...\">, <a href=\"...\">, <img src=\"...\">, "
+        "...) — it is never just inert text. On reportlab<=3.6.12 a crafted `color` attribute value escapes the "
+        "library's rl_safe_eval() sandbox entirely for arbitrary Python/OS code execution (CVE-2023-33733). "
+        "Even on a patched version, this is still markup injection into the generated PDF (formatting/layout "
+        "control, an <img src=\"http://...\"> the server will fetch, server-side read of a local path that "
+        "img tag can reference).",
 }
 
 PAYLOAD_BY_VULN = {
@@ -190,6 +199,11 @@ PAYLOAD_BY_VULN = {
                       "(uid, cn, mail, ...).",
     "SSRF (Server-Side Request Forgery)": "Try http://127.0.0.1:PORT/, http://169.254.169.254/latest/meta-data/ "
                                            "(cloud metadata), or an internal service hostname.",
+    "ReportLab Paragraph Injection (CVE-2023-33733)": "First confirm the markup is live with something inert like "
+        "<b>test</b> or <font color=\"red\">test</font> in the vulnerable field, then check the reportlab version "
+        "(pip show reportlab / requirements.txt). If <=3.6.12, use the public rl_safe_eval sandbox-escape PoC for "
+        "CVE-2023-33733 (github.com/c53elyas/CVE-2023-33733) in the same `color` attribute to get code execution "
+        "and read /flag.txt directly.",
 }
 
 

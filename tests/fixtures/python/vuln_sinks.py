@@ -3,6 +3,7 @@ import pickle
 import sqlite3
 import ldap
 from lxml import etree
+from reportlab.platypus import Paragraph
 from urllib.request import urlopen
 from flask import Flask, request, render_template_string, redirect, send_file
 
@@ -119,3 +120,19 @@ def xxe():
     # trap loot.py's docstring fell into earlier.)
     data = request.data
     return str(etree.fromstring(data))  # ruleid: XML External Entity (XXE)
+
+
+@app.route("/pdf", methods=["POST"])
+def pdf_cross_line():
+    # the realistic shape: tainted several lines before the sink, same as
+    # the actual CyberSci-style PDF-generator challenge that prompted this
+    # check — Paragraph() is called with no inline hint it's tainted.
+    title = request.form.get("title", "")
+    return str(Paragraph(title, None))  # ruleid: ReportLab Paragraph Injection (CVE-2023-33733)
+
+
+@app.route("/pdf_inline", methods=["POST"])
+def pdf_inline():
+    # same-line backstop case, covered by the regex layer even without
+    # tree-sitter-python installed.
+    return str(Paragraph(request.form.get("title", ""), None))  # ruleid: ReportLab Paragraph Injection (CVE-2023-33733)

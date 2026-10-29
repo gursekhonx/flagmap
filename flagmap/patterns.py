@@ -276,6 +276,28 @@ RAW_PATTERNS = [
         "possible",
     ),
 
+    # ---------------- REPORTLAB PARAGRAPH INJECTION ----------------
+    # Same-line case only: reportlab.platypus.Paragraph(text, style) where
+    # `text` is request data fed straight in on this one line. The far more
+    # common shape in real PDF-generator CTF challenges — `title =
+    # request.form.get(...)` on one line, `Paragraph(title, ...)` several
+    # lines later — needs real cross-line taint tracking to catch, which is
+    # what the AST engine's SINKS["python"]["Paragraph"] entry is for (see
+    # ast_engine.py); this regex only covers the inline variant as a
+    # same-line backstop for when tree-sitter-python isn't installed.
+    (
+        "ReportLab Paragraph Injection (CVE-2023-33733)",
+        "python",
+        r"""\bParagraph\s*\(\s*request\.(?:args|form|values|json)\b""",
+        "high",
+        "reportlab.platypus.Paragraph() called directly with request data. Paragraph() parses its text as "
+        "ReportLab's own mini-markup (<font color=\"...\">, <a>, <img>, ...), and reportlab<=3.6.12 lets a "
+        "crafted `color` attribute escape the rl_safe_eval() sandbox for RCE (CVE-2023-33733).",
+        "<font color=\"&lt;payload&gt;\">x</font> — see github.com/c53elyas/CVE-2023-33733 for the full "
+        "sandbox-escape expression to put in the color attribute.",
+        "likely",
+    ),
+
     # ---------------- UNRESTRICTED FILE UPLOAD ----------------
     (
         "Unrestricted File Upload",
