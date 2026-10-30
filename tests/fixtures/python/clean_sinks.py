@@ -33,6 +33,19 @@ def go():
     return redirect("/dashboard")  # safe: Open Redirect
 
 
+@app.route("/read_safe")
+def read_file_safe():
+    # cross-line sanitizer case: int() guarantees fname can only ever be a
+    # plain integer by the time it reaches open() — deliberately NOT on the
+    # same line as request.args.get(...), so this is a pure AST-taint-
+    # tracking test, not something patterns.py's same-line regex for this
+    # vuln could coincidentally pass on its own (that regex only matches
+    # `open(os.path.join(..request..)` / `open(request.args[...]` shapes).
+    fname = request.args.get("fname")
+    fname = int(fname)
+    return open(fname).read()  # safe: Path Traversal / LFI
+
+
 @app.route("/calc")
 def calc():
     # NOTE: eval() is intentionally flagged ("possible" confidence) by a

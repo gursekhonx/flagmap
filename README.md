@@ -154,6 +154,47 @@ same reason that one was: every AST finding is already tagged
 `confidence="possible"`, specifically to cover cases exactly like this
 where the callee name alone can't fully disambiguate which API is meant.
 
+**Sanitizer-call taint-clearing (v1.13.0)** came out of stress-testing
+flagmap against real external repos instead of only its own hand-built
+fixtures (DVWA, NodeGoat, Pygoat, RailsGoat, DVWS-Node — see "Testing"):
+DVWA ships a genuinely-patched "impossible" difficulty level per vuln
+category, and running flagmap against it surfaced a real AST-engine false
+positive — `$id = $_GET['id']; $id = intval($id); ...fopen($id)...` was
+still being flagged, because the AST engine tracked `$id` as tainted from
+its first assignment and never noticed the second assignment made it safe.
+A numeric cast/parse is a provable guarantee regardless of what the
+attacker sent — `intval()`/`(int)`/`(float)` in PHP, `int()`/`float()` in
+Python, `parseInt()`/`parseFloat()`/`Number()` in JS, `tonumber()` in Lua —
+so `_is_sanitizer_expr()` recognizes a bare call to one of these (or a PHP
+numeric cast expression) on the right-hand side of a re-assignment and
+explicitly clears that variable from the scope's tainted set
+(`state.tainted.discard(name)`), not just skips adding new taint to it.
+Deliberately scoped narrow: only a *bare* call to one of these exact names
+(a same-named method on some unrelated object, `foo.intval()`, does **not**
+count — `is_method` is checked and rejected) and only numeric casts/parses,
+not string-sanitizer functions (`htmlspecialchars`, `escape`, etc. stay
+out of this table — those neutralize XSS specifically and are handled by
+the separate `PHP_SAFE_ECHO_WRAPPER_RE` echo-context check, not blanket
+taint-clearing, since a string that's HTML-safe isn't necessarily SQL-safe
+or path-safe too).
+
+**Important scope note, stated plainly so this isn't oversold**: this only
+ever affects the AST taint engine's own cross-statement tracking. It has
+**no effect on `patterns.py`'s same-line regex layer**, which matches
+textually (e.g. `fopen($fname, ...)` next to a `$fname` that looks
+GET-shaped) regardless of what happened to that variable on an earlier
+line. Concretely, this fix does **not** suppress the actual DVWA
+`exec/source/impossible.php` false positive that motivated it — that
+specific finding comes from a same-line Command Injection regex matching
+`shell_exec('ping ' . $target)` irrespective of any `escapeshellarg()`
+call earlier in the function, and teaching the regex layer itself about
+preceding sanitization is a separate, larger piece of work not attempted
+here. What this *does* fix is the narrower, AST-only version of the same
+shape (a cast/parse several lines before a sink, with nothing GET/POST-
+shaped textually present on the sink's own line) — see
+`tests/fixtures/*/clean_sinks.*`'s `read_file_safe`-style cases for exactly
+the shape this covers.
+
 **Misconfiguration scanning (`config_scanner.py`) stays regex-based for
 every file type**, deliberately — Dockerfiles, `nginx.conf`, `.env`, and
 similar config formats are simple key/value or directive-per-line formats
@@ -658,8 +699,11 @@ Two layers:
    `include()`, `eval()`, etc.) — even if the superglobal isn't used inline
    on that exact line.
 
-This is **not** real taint/dataflow analysis — no control flow, no scope
-awareness, no sanitizer detection. It's built to catch the specific patterns
+This is **not** real taint/dataflow analysis — no control flow, no general
+sanitizer detection (the AST engine's taint-lite layer recognizes one
+narrow, provably-safe case — numeric casts/parses, see "Architecture"'s
+"Sanitizer-call taint-clearing" — but nothing broader than that, and the
+regex layer recognizes none at all). It's built to catch the specific patterns
 that show up constantly in intentionally-vulnerable CTF code. Every finding
 is tagged `likely` or `possible` confidence so you know which ones are worth
 checking first. Treat it as a fast triage pass, not ground truth — always
@@ -1024,6 +1068,24 @@ only in `old/`, to confirm a removed file doesn't crash or wrongly appear
 (it can't produce a finding in the new scan either way, so it's outside
 what this check even needs to assert).
 
+**A third validation layer, beyond this repo's own fixtures**: hand-built
+fixtures only ever catch what whoever wrote them thought to write — they
+can't surface a false positive nobody anticipated. So alongside the
+`EXPECTED.txt`/`ruleid`/`safe` suite above, flagmap gets periodically
+stress-tested against real, external vulnerable-by-design repos (DVWA,
+OWASP NodeGoat, Pygoat, RailsGoat, DVWS-Node), which exist specifically to
+be exploited and usually ship a "fixed"/"impossible"-difficulty reference
+implementation per vuln category to check false positives against. This
+is where the v1.13.0 sanitizer-call taint-clearing fix came from (DVWA's
+`exec/source/impossible.php`) and where ReportLab Paragraph Injection
+(v1.11.0) came from originally too (a real user-submitted challenge, not
+one of these corpora) — real code surfaces gaps a curated fixture set
+won't think to include. Not automated into `run_regression.py` (these
+repos are large, licensed separately, and not vendored into this repo),
+so this is a manual periodic exercise, not something CI runs on every
+change — a finding worth keeping gets turned into a proper fixture here,
+same as every other check in this file was.
+
 Do **not** run this (or anything else in the repo) from inside a stale venv
 with an old editable install of flagmap sitting in it — that shadows the
 live source with whatever version was `pip install -e`'d there and produces
@@ -1194,11 +1256,18 @@ on the normal `python3` interpreter's path, is the reliable way to run it.
   function's own parameters get seeded from its call sites, but taint
   doesn't propagate further than that, and each *file* is still analyzed
   independently of every other file)
-- Recognize common sanitizer/allowlist calls (`dict.get()` against a fixed
-  mapping, a validated cast) as taint-clearing, to cut down on the
-  structurally-correct-but-practically-safe findings the broader
-  route-parameter seeding in v1.0.0 can produce (e.g. a URL path segment
-  used only as a key into a fixed allowlist dict)
+- ~~Recognize common sanitizer calls (a validated cast) as taint-clearing~~
+  — the numeric-cast half added in v1.13.0 via `ast_engine.py`'s
+  `_is_sanitizer_expr()`/`SANITIZER_CALLS`/`PHP_SAFE_CAST_TYPES` (see
+  "Architecture"'s "Sanitizer-call taint-clearing"), found the same way
+  ReportLab Paragraph Injection was — stress-testing flagmap against real
+  external vulnerable-by-design repos (DVWA, NodeGoat, Pygoat, RailsGoat,
+  DVWS-Node) surfaced it as an actual false positive rather than it being
+  anticipated here first. The `dict.get()`-against-a-fixed-mapping/
+  allowlist half of this idea is **not** done — that needs recognizing a
+  specific *mapping literal* as the allowlist, a different and harder
+  shape than "this call always returns a safe type no matter its input,"
+  and remains open.
 - ~~A `--diff` mode to scan only files changed ... for when challenge
   authors release a patched version~~ — added in v1.12.0 as
   `--diff-against`/`diffscan.py`, see "Re-scanning a patched challenge".

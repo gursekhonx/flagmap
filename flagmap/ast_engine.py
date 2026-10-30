@@ -243,6 +243,45 @@ SOURCE_CANDIDATE_NODE_TYPES = {
 ROUTE_DECORATOR_RE = re.compile(r"""@\w+\.(?:get|post|put|delete|patch|route)\b""")
 TAINTED_PARAM_TYPE_RE = re.compile(r"""^(?:str|int|float|UUID|Optional\[)""")
 
+# Sanitizer/validation calls whose RETURN VALUE clears taint, regardless of
+# whether their own argument was tainted — `$id = intval($_GET['id'])` is
+# genuinely, categorically safe to drop into a concatenated SQL string
+# afterward, because intval() guarantees the result is an int no matter
+# what string went in; unlike a "does this look escaped" heuristic, a
+# numeric cast is a hard type guarantee that fully answers the only
+# question an injection sink cares about. Found via real-world testing:
+# DVWA's actual exec/impossible.php — the one genuinely-fixed command-
+# injection example in a very well-known benchmark app — still got
+# flagged before this existed, because nothing recognized its is_numeric()
+# validation (DVWA's own case is more involved — multi-octet, condition-
+# gated — than a single cast call, so it's still a known miss; see
+# "What it can't catch" — but the simpler, far more common `$id =
+# intval($_GET['id'])` shape this table DOES cover was an identical kind
+# of false positive, just a plainer version of the same root cause).
+#
+# Deliberately scoped to BARE function calls only (not `receiver.method()`
+# forms) for this first pass — Go's `strconv.Atoi`, Java's
+# `Integer.parseInt`, Ruby's `.to_i` are all real, common equivalents but
+# need receiver-aware matching this table doesn't attempt yet (a bare name
+# check alone can't tell `to_i` the sanitizer from an unrelated custom
+# method of the same name on some other receiver).
+SANITIZER_CALLS = {
+    "python": {"int", "float"},
+    "js": {"parseInt", "parseFloat", "Number"},
+    "php": {"intval", "floatval", "boolval"},
+    "lua": {"tonumber"},
+}
+
+# PHP's `(int)$x`/`(float)$x`/`(bool)$x` cast-expression syntax — same
+# taint-clearing guarantee as the SANITIZER_CALLS table above, just a
+# different AST node shape (cast_expression wrapping cast_type), not a
+# call at all, so it needs its own check rather than fitting the
+# call-based one. No equivalent added for Java/C-style casts: Java's
+# `(int)someString` doesn't even compile (an int<->String cast isn't a
+# parse operation there the way PHP's is), so there's no analogous safe
+# idiom to recognize for that language.
+PHP_SAFE_CAST_TYPES = {"int", "integer", "float", "double", "bool", "boolean"}
+
 # Dangerous sink calls/methods. Each entry: (vuln_name, slot, var_set),
 # where slot is "arg0" (first argument must be tainted — a query string, a
 # path, a template) or "receiver" (the object the method is called ON must
@@ -756,6 +795,27 @@ def _call_info(node, language):
     return None
 
 
+def _is_sanitizer_expr(node, language: str) -> bool:
+    """True if `node` is an expression whose value is guaranteed safe
+    regardless of its own input — a numeric cast/parse call (SANITIZER_
+    CALLS) or, for PHP, a `(int)`/`(float)`/`(bool)` cast_expression. Used
+    at assignment sites to clear (not propagate) taint — see
+    SANITIZER_CALLS' module-level comment for why this is sound and what
+    it deliberately doesn't attempt yet."""
+    if node is None:
+        return False
+    if language == "php" and node.type == "cast_expression":
+        type_node = node.child_by_field_name("type")
+        return type_node is not None and _text(type_node) in PHP_SAFE_CAST_TYPES
+    info = _call_info(node, language)
+    if info is None:
+        return False
+    callee_name, is_method, _receiver, _args = info
+    if is_method:
+        return False  # bare calls only — see SANITIZER_CALLS' comment
+    return callee_name in SANITIZER_CALLS.get(language, set())
+
+
 def _nth_arg_expr(args_node, language, index: int):
     if args_node is None:
         return None
@@ -1101,7 +1161,15 @@ def _walk(node, language, state: _ScopeState, ctx: _Ctx):
         lhs, rhs = _assign_lhs_rhs(node, language)
         if lhs is not None and lhs.type == IDENTIFIER_NODE_TYPE[language] and rhs is not None:
             name = _text(lhs)
-            if _matched_taint_source(rhs, state.tainted, language):
+            if _is_sanitizer_expr(rhs, language):
+                # A numeric cast/parse guarantees a safe result no matter
+                # what went in — clear any taint this name carried from an
+                # earlier assignment too, not just skip adding new taint,
+                # so `$id = $_GET['id']; ... ; $id = intval($id);` ends up
+                # untainted from this point on, same as writing the cast
+                # inline would.
+                state.tainted.discard(name)
+            elif _matched_taint_source(rhs, state.tainted, language):
                 state.tainted.add(name)
             if language == "python" and t == "augmented_assignment":
                 state.built.add(name)

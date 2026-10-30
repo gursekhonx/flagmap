@@ -55,3 +55,22 @@ function xxeSafe() {
     $xml = simplexml_load_string($_POST['xml']);  // safe: XML External Entity (XXE)
     return $xml;
 }
+
+function readFileSafeIntval() {
+    // cross-line sanitizer case: intval() guarantees $fname can only ever
+    // be a plain integer by the time it reaches fopen() — deliberately NOT
+    // on the same line as $_GET, so this is a pure AST-taint-tracking test
+    // (patterns.py's same-line fopen($_GET...) regex can't match here at
+    // all, since $_GET never appears on the fopen() line itself).
+    $fname = $_GET['fname'];
+    $fname = intval($fname);
+    fopen($fname, "r");  // safe: Path Traversal / LFI
+}
+
+function readFileSafeCast() {
+    // same idea, but via a (int) cast instead of intval() — both clear
+    // taint the same way, see ast_engine.py's PHP_SAFE_CAST_TYPES.
+    $fname = $_GET['fname'];
+    $fname = (int)$fname;
+    fopen($fname, "r");  // safe: Path Traversal / LFI
+}
