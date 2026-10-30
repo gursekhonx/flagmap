@@ -12,6 +12,7 @@ from . import __version__
 from .scanner import scan_path, Finding
 from .chains import find_chains
 from .report_md import render_markdown
+from .diffscan import find_changed_files
 
 SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2}
 SEVERITY_COLOR = {"high": "\033[91m", "medium": "\033[93m", "low": "\033[94m"}
@@ -254,6 +255,13 @@ def build_parser():
         help="Also write the report as a standalone Markdown file (for sharing with a team), "
              "in addition to the normal terminal/--json output",
     )
+    parser.add_argument(
+        "--diff-against",
+        metavar="OLD_PATH",
+        help="Only report findings in files that changed (added or modified) since OLD_PATH — "
+             "point it at a previous snapshot of the same challenge to see what a patch touched "
+             "(and whether it introduced anything new), instead of re-reading a full report",
+    )
     parser.add_argument("--version", action="version", version=f"flagmap {__version__}")
     return parser
 
@@ -283,10 +291,37 @@ def main(argv=None):
     findings = scan_path(args.path)
     findings = filter_findings(findings, args.severity, args.min_confidence)
 
+    diff_summary = None
+    if args.diff_against:
+        if not os.path.exists(args.diff_against):
+            print(f"error: --diff-against path not found: {args.diff_against}", file=sys.stderr)
+            return 1
+        changed, n_new, n_old = find_changed_files(args.diff_against, args.path)
+
+        def _changed(f):
+            try:
+                rel = os.path.relpath(f.file, args.path)
+            except ValueError:
+                return True  # couldn't compute a relative path at all — don't silently hide it
+            return rel in changed
+
+        before = len(findings)
+        findings = [f for f in findings if _changed(f)]
+        diff_summary = (
+            f"--diff-against {args.diff_against}: {len(changed)} of {n_new} file(s) changed "
+            f"since that snapshot ({n_old} file(s) there) — showing {len(findings)} of "
+            f"{before} finding(s), restricted to changed files."
+        )
+
     if args.json:
         chains = [] if args.no_chains else find_chains(findings)
-        print(json.dumps({"findings": findings_to_dicts(findings), "chains": chains_to_dicts(chains)}, indent=2))
+        payload = {"findings": findings_to_dicts(findings), "chains": chains_to_dicts(chains)}
+        if diff_summary is not None:
+            payload["diff"] = diff_summary
+        print(json.dumps(payload, indent=2))
     else:
+        if diff_summary is not None:
+            print(diff_summary)
         use_color = supports_color() and not args.no_color
         print_report(
             findings,

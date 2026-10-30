@@ -574,13 +574,19 @@ flagmap ./challenge_source --no-chains --no-start-here
 # also write a shareable Markdown writeup (e.g. to paste/drop for your team)
 flagmap ./challenge_source --export-md report.md
 
+# only show findings in files that changed since an earlier snapshot
+# (e.g. the organizers just pushed a patched "v2" of the challenge)
+flagmap ./challenge_source_v2 --diff-against ./challenge_source_v1
+
 # print the installed version
 flagmap --version
 ```
 
 Output is split into up to six sections (plus `--export-md`, which renders
 the same findings/chains as a standalone Markdown file alongside whatever
-else you asked for — see "Sharing results with a team" below):
+else you asked for — see "Sharing results with a team" below — and
+`--diff-against`, which narrows all of them to files changed since a
+previous snapshot — see "Re-scanning a patched challenge" below):
 
 1. **Loot / Recon** — exposed `.git`, `.env`/keys, backup files, hardcoded
    flag-shaped strings. Needs zero exploitation, so it's printed first and
@@ -607,7 +613,7 @@ else you asked for — see "Sharing results with a team" below):
    attack-chain membership, severity, and confidence. Built for the moment
    you open a report and just want to know what to click on first.
 
-### Sharing results with a team (`--export-md`, added v1.9.0)
+### Sharing results with a team (`--export-md`, added v1.10.0)
 
 `--export-md FILE` renders the exact same findings and chains as a
 standalone `.md` file (`report_md.py`) — same sections, same grouping,
@@ -619,6 +625,25 @@ over Discord/Slack, under a clock: the person who ran flagmap is rarely
 the only one who needs the results, and reading them off a terminal means
 re-describing them by hand in chat. This makes "paste it in Discord" or
 "drop it in the team's shared doc" a straight file hand-off instead.
+
+### Re-scanning a patched challenge (`--diff-against`, added v1.12.0)
+
+`--diff-against OLD_PATH` restricts the report to findings in files that
+are new or changed (by byte content, not mtime) relative to a previous
+snapshot of the same challenge — built for the specific moment an
+organizer announces a patch mid-competition ("v2 is up, the old bug is
+fixed") and the real question is "what did they touch, and is there
+anything NEW in exactly those files" (a patch is itself a common place
+for a *second* bug to slip in). Re-reading a full report by eye to spot
+that defeats the point of having a scanner.
+
+Deliberately diffs two plain directory snapshots (`diffscan.py`), not two
+git refs: a CTF handout is essentially never its own git repository — if
+one WERE shipped, that's itself a loot/recon finding (see "Loot /
+Recon") — so there's nothing to assume the player has been committing
+to. "Point it at the folder you already downloaded" needs no setup.
+Works alongside every other flag, including `--json` (the summary lands
+in a top-level `"diff"` key) and `--export-md`.
 
 ## How it decides what to flag
 
@@ -914,6 +939,7 @@ flagmap/
     deps.py                # curated known-CVE pinned-dependency table + manifest/lockfile parsers (see "Vulnerable Dependencies")
     xxe_guard.py            # whole-file XXE false-positive suppression (see "Best-effort heuristics")
     report_md.py            # standalone Markdown report renderer (--export-md, see "Sharing results with a team")
+    diffscan.py              # two-snapshot file-diffing (--diff-against, see "Re-scanning a patched challenge")
     chains.py              # attack-path correlation over a scan's findings
     config_patterns.py    # the misconfiguration pattern database
     config_scanner.py      # file walking + checks (Dockerfile/nginx/.env/etc.)
@@ -984,6 +1010,19 @@ smoke-testing during development (`--export-md` against a populated
 scan, an empty-findings scan, and alongside `--json`) rather than a
 fourth `EXPECTED.txt`-style convention that would just be asserting the
 same findings all over again under a different name.
+
+`diffscan.py` is the opposite case — real logic worth its own fixtures
+(added/modified/unchanged-file detection, not just rendering) — so it
+gets a fifth `EXPECTED.txt` convention under `tests/fixtures/diffscan/
+<case>/`: an `old/` and a `new/` directory (two snapshots) instead of a
+single `app/`, and the expected set is the relative paths (relative to
+`new/`) `find_changed_files()` must report as changed. `case1` covers
+all three shapes at once: a file identical in both (must NOT appear), a
+file with the same name but different bytes in each (must appear), and a
+file that exists only in `new/` (must appear) — plus a file that exists
+only in `old/`, to confirm a removed file doesn't crash or wrongly appear
+(it can't produce a finding in the new scan either way, so it's outside
+what this check even needs to assert).
 
 Do **not** run this (or anything else in the repo) from inside a stale venv
 with an old editable install of flagmap sitting in it — that shadows the
@@ -1160,14 +1199,15 @@ on the normal `python3` interpreter's path, is the reliable way to run it.
   structurally-correct-but-practically-safe findings the broader
   route-parameter seeding in v1.0.0 can produce (e.g. a URL path segment
   used only as a key into a fixed allowlist dict)
-- A `--diff` mode to scan only files changed vs. a git baseline, for when
-  challenge authors release a patched version
-- ~~Export findings straight into a writeup template~~ — added in v1.9.0
+- ~~A `--diff` mode to scan only files changed ... for when challenge
+  authors release a patched version~~ — added in v1.12.0 as
+  `--diff-against`/`diffscan.py`, see "Re-scanning a patched challenge".
+  Built against two plain directory snapshots rather than a git baseline
+  as originally imagined here — a CTF handout being its own git repo
+  isn't a reasonable thing to assume (and if one is shipped as one,
+  that's loot.py's job to flag, not this feature's job to require).
+- ~~Export findings straight into a writeup template~~ — added in v1.10.0
   via `--export-md`/`report_md.py`, see "Sharing results with a team".
   Renders the exact same findings/chains print_report() already computes,
   just as Markdown instead of terminal text, so there's no second
   detection code path to keep in sync — only a second renderer.
-- Absence-of-authorization-check heuristics (IDOR / missing access control
-  on an identity-shaped route parameter) — flagged in testing as a real,
-  recurring miss, but needs a scanner-level check rather than a line regex
-  to avoid heavy false positives

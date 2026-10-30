@@ -34,6 +34,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from flagmap.scanner import scan_path  # noqa: E402
 from flagmap.loot import find_loot  # noqa: E402
 from flagmap.deps import find_vulnerable_deps  # noqa: E402
+from flagmap.diffscan import find_changed_files  # noqa: E402
 
 FIXTURES_DIR = os.path.join(os.path.dirname(__file__), "..", "tests", "fixtures")
 
@@ -56,6 +57,12 @@ LOOT_FIXTURES_DIR = os.path.join(FIXTURES_DIR, "loot")
 # name collision, or a version comparison that's off by one bound) fails
 # the suite exactly as loudly as a missed true positive.
 DEPS_FIXTURES_DIR = os.path.join(FIXTURES_DIR, "deps")
+
+# tests/fixtures/diffscan/<case>/ each hold an old/ and a new/ directory
+# (two snapshots of "the same challenge") plus an EXPECTED.txt listing the
+# relative paths (relative to new/) find_changed_files() must report as
+# changed — exact set equality again, same reasoning as loot/deps above.
+DIFFSCAN_FIXTURES_DIR = os.path.join(FIXTURES_DIR, "diffscan")
 
 _MARKER_RE = re.compile(r"""(?:\#|//|--)\s*(ruleid|safe)\s*:?\s*(.*?)\s*$""")
 
@@ -181,6 +188,29 @@ def run_deps_fixture(case_dir):
     return 0, 1, lines
 
 
+def run_diffscan_fixture(case_dir):
+    """Returns (n_passed, n_failed, failure_lines) for one tests/fixtures/
+    diffscan/<case>/ directory — see DIFFSCAN_FIXTURES_DIR's comment above."""
+    expected_path = os.path.join(case_dir, "EXPECTED.txt")
+    old_dir = os.path.join(case_dir, "old")
+    new_dir = os.path.join(case_dir, "new")
+    with open(expected_path, encoding="utf-8") as f:
+        expected = {line.strip() for line in f if line.strip()}
+
+    changed, _n_new, _n_old = find_changed_files(old_dir, new_dir)
+
+    if changed == expected:
+        return 1, 0, []
+    missing = expected - changed
+    extra = changed - expected
+    lines = []
+    if missing:
+        lines.append(f"  missing: {sorted(missing)}")
+    if extra:
+        lines.append(f"  unexpected: {sorted(extra)}")
+    return 0, 1, lines
+
+
 def main():
     verbose = "-v" in sys.argv
     total_passed, total_failed = 0, 0
@@ -188,7 +218,7 @@ def main():
 
     for lang in sorted(os.listdir(FIXTURES_DIR)):
         lang_dir = os.path.join(FIXTURES_DIR, lang)
-        if not os.path.isdir(lang_dir) or lang_dir in (LOOT_FIXTURES_DIR, DEPS_FIXTURES_DIR):
+        if not os.path.isdir(lang_dir) or lang_dir in (LOOT_FIXTURES_DIR, DEPS_FIXTURES_DIR, DIFFSCAN_FIXTURES_DIR):
             continue
         for fname in sorted(os.listdir(lang_dir)):
             fpath = os.path.join(lang_dir, fname)
@@ -232,6 +262,22 @@ def main():
             status = "PASS" if failed == 0 else "FAIL"
             if failed or verbose:
                 print(f"[{status}] deps/{case}  ({passed} ok, {failed} failed)")
+            if failure_lines:
+                any_failures = True
+                for fl in failure_lines:
+                    print(fl)
+
+    if os.path.isdir(DIFFSCAN_FIXTURES_DIR):
+        for case in sorted(os.listdir(DIFFSCAN_FIXTURES_DIR)):
+            case_dir = os.path.join(DIFFSCAN_FIXTURES_DIR, case)
+            if not os.path.isfile(os.path.join(case_dir, "EXPECTED.txt")):
+                continue
+            passed, failed, failure_lines = run_diffscan_fixture(case_dir)
+            total_passed += passed
+            total_failed += failed
+            status = "PASS" if failed == 0 else "FAIL"
+            if failed or verbose:
+                print(f"[{status}] diffscan/{case}  ({passed} ok, {failed} failed)")
             if failure_lines:
                 any_failures = True
                 for fl in failure_lines:
