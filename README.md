@@ -195,6 +195,35 @@ shaped textually present on the sink's own line) — see
 `tests/fixtures/*/clean_sinks.*`'s `read_file_safe`-style cases for exactly
 the shape this covers.
 
+**Vendored-library noise suppression (`vendor_guard.py`, v1.14.0)** is the
+other finding from the same real-repo stress-testing pass, found against a
+different corpus repo — RailsGoat, not DVWA. Rails' pre-Webpacker asset
+pipeline convention checks third-party JS straight into
+`app/assets/javascripts/`, with no `vendor/`/`node_modules/` directory for
+`scanner.SKIP_DIRS` to exclude by path: a jQuery DataTables plugin, the
+HTML5 Shiv polyfill, Google's AJAX API loader, and an IcoMoon icon-font's
+IE7/8 shim all ended up sitting directly next to RailsGoat's own
+hand-written controllers, and every one of them tripped `patterns.py`'s
+two broadest, least context-aware regexes — a bare `eval(...)` anywhere
+(`"Command Injection / RCE"`, language `"generic"`) and a bare
+`.innerHTML = ...` assignment (`"Cross-Site Scripting (XSS) — DOM-based"`)
+— purely from each library's own ordinary, unexploitable use of those
+shapes (feature detection, DOM shims), six separate times across four
+files, none of it RailsGoat's own intended bug. `vendor_guard.is_vendor_file()`
+combines five independent, deliberately conservative signals (the jQuery-
+plugin filename convention, a `.min.js`/`.min.css` suffix, a short curated
+list of well-known always-vendored filenames, a webfont file sitting in
+the same directory, and a license/version banner comment near the top of
+the file) — any one is enough, and each was picked specifically because
+it almost never matches hand-written, intentionally-vulnerable CTF source.
+`scanner.py` only suppresses the same two specific rules this problem was
+actually observed on (reusing the exact `NOISY_IN_TEST_FILES` mechanism's
+shape, just keyed on a sibling `NOISY_IN_VENDOR_FILES` set and a new
+`is_vendor_file()` check instead of `is_test_file()`) — nothing else in
+flagmap treats a vendor-shaped file any differently, so a real taint-
+tracked finding (SQLi, SSRF, ...) inside one still fires exactly as
+before.
+
 **Misconfiguration scanning (`config_scanner.py`) stays regex-based for
 every file type**, deliberately — Dockerfiles, `nginx.conf`, `.env`, and
 similar config formats are simple key/value or directive-per-line formats
@@ -984,6 +1013,7 @@ flagmap/
     xxe_guard.py            # whole-file XXE false-positive suppression (see "Best-effort heuristics")
     report_md.py            # standalone Markdown report renderer (--export-md, see "Sharing results with a team")
     diffscan.py              # two-snapshot file-diffing (--diff-against, see "Re-scanning a patched challenge")
+    vendor_guard.py          # suppresses the noisiest rules on vendored/third-party library files (see "Architecture", added v1.14.0)
     chains.py              # attack-path correlation over a scan's findings
     config_patterns.py    # the misconfiguration pattern database
     config_scanner.py      # file walking + checks (Dockerfile/nginx/.env/etc.)
@@ -1054,6 +1084,26 @@ smoke-testing during development (`--export-md` against a populated
 scan, an empty-findings scan, and alongside `--json`) rather than a
 fourth `EXPECTED.txt`-style convention that would just be asserting the
 same findings all over again under a different name.
+
+`vendor_guard.py`'s filename-shaped signals (the jQuery-plugin naming
+convention, `.min.js`/`.min.css`, the curated known-vendor-basename list,
+and the license-banner scan) get a regular `ruleid`/`safe` fixture —
+`tests/fixtures/js/jquery.fake-plugin.min.js` (suppressed, same file
+content as the control case) alongside the existing
+`tests/fixtures/js/vuln_sinks.js` (not suppressed — see its
+`renderUserBio` case) — because both live entirely inside one file's own
+name and text, exactly what that convention already checks. Its one
+*directory*-shaped signal — a webfont file sitting next to the script,
+the IcoMoon/Font-Awesome packaging pattern `lte-ie7.js` actually used —
+is deliberately **not** given its own fixture category: it was verified
+directly against the real RailsGoat file that motivated it (confirmed
+suppressed) rather than built out into a sixth `EXPECTED.txt` convention,
+since that would mean inventing a new multi-file directory-comparison
+harness for one edge signal materially narrower in scope than loot.py's
+or diffscan.py's (which each cover a whole category of check, not one
+signal inside a five-signal heuristic) — a disproportionate amount of new
+harness machinery for what it would add. Worth revisiting if this signal
+turns out to matter more in practice than the other four.
 
 `diffscan.py` is the opposite case — real logic worth its own fixtures
 (added/modified/unchanged-file detection, not just rendering) — so it
@@ -1268,6 +1318,15 @@ on the normal `python3` interpreter's path, is the reliable way to run it.
   specific *mapping literal* as the allowlist, a different and harder
   shape than "this call always returns a safe type no matter its input,"
   and remains open.
+- ~~Suppress noise from vendored/third-party library files checked
+  directly into app source trees~~ — added in v1.14.0 via
+  `vendor_guard.py`, see "Architecture"'s "Vendored-library noise
+  suppression". Also found via the same real-repo stress-testing pass
+  (RailsGoat this time, not DVWA) — not anticipated ahead of time either.
+  Deliberately scoped to the two specific rules actually observed causing
+  this (bare `eval()`, bare `.innerHTML=`), not a blanket "ignore findings
+  in files that look vendored" rule — a real taint-tracked finding inside
+  a vendored file still fires exactly as before.
 - ~~A `--diff` mode to scan only files changed ... for when challenge
   authors release a patched version~~ — added in v1.12.0 as
   `--diff-against`/`diffscan.py`, see "Re-scanning a patched challenge".

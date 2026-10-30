@@ -58,3 +58,11 @@ app.get("/proxy", async (req, res) => {
   const upstream = await fetch(target);  // ruleid: SSRF (Server-Side Request Forgery)
   res.send(await upstream.text());
 });
+
+function renderUserBio(bio) {
+  // control case for vendor_guard.py: this file's own name ("vuln_sinks.js")
+  // matches none of vendor_guard.is_vendor_file()'s signals, so the bare
+  // .innerHTML= rule must still fire here exactly as before — see
+  // tests/fixtures/js/jquery.fake-plugin.min.js for the suppressed case.
+  document.getElementById("bio").innerHTML = bio;  // ruleid: Cross-Site Scripting (XSS) — DOM-based
+}

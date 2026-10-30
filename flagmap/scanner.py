@@ -15,6 +15,7 @@ from .heredoc import iter_heredoc_sources
 from .loot import find_loot
 from .deps import find_vulnerable_deps
 from .xxe_guard import filter_guarded_xxe
+from .vendor_guard import is_vendor_file, NOISY_IN_VENDOR_FILES
 from .ast_engine import scan_ast, AST_SUPPORTED_LANGUAGES
 
 # No hand-written vulnerable application code is ever a single line this long —
@@ -110,6 +111,17 @@ def scan_lines(path: str, language: str, lines: List[str], patterns: list) -> Li
 
     applicable = [p for p in patterns if p["language"] in (language, "generic")]
 
+    # is_vendor_file() does a directory listing and a regex scan of the
+    # file's own text — cheap, but not "do it on every line" cheap, so it's
+    # computed at most once per file, and only if this file could even
+    # produce one of the findings vendor_guard.py cares about in the first
+    # place (no applicable rule in NOISY_IN_VENDOR_FILES → skip entirely).
+    _vendor_checked = False
+    _is_vendor = False
+    if any(p["payload"] in NOISY_IN_VENDOR_FILES for p in applicable):
+        _vendor_checked = True
+        _is_vendor = is_vendor_file(path, "".join(lines))
+
     for line_no, line in enumerate(lines, start=1):
         stripped = line.strip()
         if not stripped or stripped.startswith(("//", "#", "*")):
@@ -119,6 +131,8 @@ def scan_lines(path: str, language: str, lines: List[str], patterns: list) -> Li
             continue
         for pat in applicable:
             if pat["payload"] in NOISY_IN_TEST_FILES and is_test_file(path):
+                continue
+            if _vendor_checked and _is_vendor and pat["payload"] in NOISY_IN_VENDOR_FILES:
                 continue
             if pat["regex"].search(line):
                 findings.append(Finding(
