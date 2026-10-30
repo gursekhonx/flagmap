@@ -10,6 +10,8 @@ from .patterns import compiled_patterns, EXTENSION_LANGUAGE, SKIP_DIRS, NOISY_IN
 from .taint import find_tainted_sinks, find_format_string_sinks
 from .csrf import find_missing_csrf
 from .idor import find_idor_candidates, IDOR_LANGUAGES
+from .authn_guard import find_missing_authn_candidates, AUTHN_GUARD_LANGUAGES
+from .pickle_guard import annotate_guarded_pickle_loads
 from .config_scanner import scan_config_path
 from .heredoc import iter_heredoc_sources
 from .loot import find_loot
@@ -264,6 +266,41 @@ def scan_lines(path: str, language: str, lines: List[str], patterns: list) -> Li
                         "their data.",
                 confidence="possible",
             ))
+
+    # best-effort Missing Authentication Check: a function that reads a
+    # username/identity claim straight from the request and grants a new
+    # session/token/cookie for it, with no textual sign of a credential
+    # check anywhere in the function. See authn_guard.py's module
+    # docstring for exactly what this does and doesn't try to prove.
+    if language in AUTHN_GUARD_LANGUAGES:
+        for anf in find_missing_authn_candidates(path, language, source_bytes, lines):
+            key = (anf.line_no, "Missing Authentication Check")
+            if key in seen:
+                continue
+            seen.add(key)
+            findings.append(Finding(
+                file=anf.file,
+                line_no=anf.line_no,
+                line_text=anf.line_text,
+                vuln_name="Missing Authentication Check",
+                severity="high",
+                why="This function reads a username/identity value straight from the request and grants a new "
+                    "session, token, or auth cookie for it, but there's no sign anywhere in the function (or "
+                    "the decorator/annotation directly above it) of any credential/password check — not even "
+                    "an insecure one. If nothing upstream of this already verified the caller's identity, this "
+                    "grants access to anyone who can name a username.",
+                payload="Call this with any username (registered or not) and see whether it returns a usable "
+                        "session/token with no password/credential required at all.",
+                confidence="possible",
+            ))
+
+    # Rewrites, in place, the advice on any "Unsafe Deserialization"
+    # finding that sits on a pickle.loads()/load() call immediately
+    # preceded by a validator-shaped call sharing its argument — see
+    # pickle_guard.py's module docstring for why flagmap's default
+    # "craft a __reduce__ gadget" advice can be actively wrong for a
+    # pickle call site that's already gated by a hand-rolled check.
+    annotate_guarded_pickle_loads(language, source_bytes, lines, findings)
 
     return findings
 

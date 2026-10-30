@@ -224,6 +224,35 @@ flagmap treats a vendor-shaped file any differently, so a real taint-
 tracked finding (SQLi, SSRF, ...) inside one still fires exactly as
 before.
 
+**Missing Authentication Check (`authn_guard.py`, v1.15.0) and guarded-
+deserialization advice (`pickle_guard.py`, v1.15.0)** both came out of
+testing flagmap against a real attached CTF challenge rather than a
+public repo this time — a MetaCTF-style gRPC/protobuf service ("stubborne")
+whose `Login` RPC issued a brand-new session for any client-supplied
+username with no password field on the request at all, and whose `Submit`
+RPC deserialized a pickle blob only after passing it through a hand-rolled
+opcode allowlist that excludes every gadget-capable opcode. Neither gap
+fit an existing rule: the first is a genuinely new absence-of-a-check
+category (not IDOR — there's no specific resource/ownership concept
+here), and the second isn't a new finding at all, just wrong advice on an
+existing one (flagmap's default "craft a `__reduce__` gadget" suggestion
+for Unsafe Deserialization is actively misleading once a real filter sits
+in front of the call). `authn_guard.py` reuses `idor.py`'s AST
+function-boundary approach and fires only when a function both reads an
+identity claim from the request and grants a session/token/cookie, with
+no credential-check hint anywhere in the function or its 5-line header
+lookback (same `_HEADER_LOOKBACK_LINES` convention as `idor.py`).
+`pickle_guard.py` does not add or suppress a finding — it mutates an
+existing "Unsafe Deserialization" finding's `why`/`payload` in place when
+a validator-shaped call sharing the same argument text runs immediately
+before the deserializing call in the same function, pointing the advice
+at what the validator still permits instead of a blanket RCE suggestion.
+Both are covered in full in "Best-effort heuristics" below, including the
+self-referential false-positive bugs each one caught in its own
+docstring/fixtures during development — the same recurring trap this
+project has hit with `loot.py`, `xxe_guard.py`, and `vendor_guard.py`
+before it.
+
 **Misconfiguration scanning (`config_scanner.py`) stays regex-based for
 every file type**, deliberately — Dockerfiles, `nginx.conf`, `.env`, and
 similar config formats are simple key/value or directive-per-line formats
@@ -311,6 +340,15 @@ Ruby/Rails, Lua, Rust):
   check does NOT count as that ownership check — see "Best-effort
   heuristics" for exactly what does and the real false-positive/negative
   tradeoffs of a check this coarse)
+- Missing Authentication Check (best-effort, added v1.15.0, Python/JS/
+  PHP/Go/Java/Ruby: a function that reads a username/email/login value
+  straight from the request AND grants a new session/token/cookie
+  somewhere in its body, with no sign of a credential check anywhere in
+  the function or its decorator/annotation. Requires both — reading an
+  identity claim alone, or granting a session alone, each describe
+  plenty of ordinary, correctly-checked code too; see "Best-effort
+  heuristics" for the stubborne-style case this was built for and its
+  known false positives/negatives)
 - GraphQL / Query Injection (a query/mutation document built with `%`
   formatting or template-literal interpolation instead of GraphQL variables)
 - LDAP Injection (AST-matched since v1.4.0, Python/PHP/Java): a search
@@ -895,6 +933,64 @@ than flagging when a check seems absent.
   earlier. Fixed by rewording those comments to describe the absence
   without quoting the literal marker text.
 
+- **Missing Authentication Check** (`authn_guard.py`, added v1.15.0) —
+  the newest of the absence-of-a-check heuristics, found against a real
+  MetaCTF-style gRPC challenge whose `Login` RPC handler looked up a user
+  by a client-supplied username and unconditionally issued a brand-new
+  session token for it — no password field even existed on the request,
+  let alone a check. Not IDOR (no specific resource/ownership concept
+  here), not Weak Auth Logic (that's for a check that exists but is done
+  *wrong*; this is a check that doesn't exist at all), not CSRF — flagmap
+  had no rule shape for "this function grants access for a claimed
+  identity with nothing verifying it" before this. Fires only when BOTH
+  are true in the same function (Python/JS/PHP/Go/Java/Ruby, via
+  `ast_engine.py`'s function-boundary detection, same as `idor.py`): it
+  reads a username/email/login value straight from the request, AND it
+  grants a new session/token/cookie somewhere in its body. Deliberately
+  requires both — reading an identity claim alone is true of almost any
+  correctly-checked login handler too, and granting a session alone is
+  true of plenty of unrelated code (a CSRF-token refresh, a shopping-cart
+  id) that has nothing to do with authentication. Deliberately broad and
+  inclusive about what counts as "a check happened", unlike `idor.py`'s
+  narrow ownership vocabulary: the bare word "password" counts on its
+  own, same as a real (if weak) `bcrypt`/`jwt.decode`/`authenticate(`
+  call — the point isn't proving the check is *correct*, only that
+  *something* was attempted, so a bad comparison still suppresses this
+  (that's `patterns.py`'s existing Weak Auth Logic rule's job to catch
+  instead). Caught a real self-referential bug during development, same
+  trap as `xxe_guard.py`'s own fixtures before it: the vulnerable test
+  fixture's explanatory comment said the missing check's name out loud
+  ("no password check anywhere..."), which made the word appear in the
+  very function being asserted as unguarded, suppressing the finding the
+  fixture existed to prove. Fixed the same way that earlier trap was —
+  describing the absence without naming the literal term.
+
+- **Deserialization-guard-aware advice** (`pickle_guard.py`, added
+  v1.15.0) — not a new finding or a suppressor, a *rewrite* of the advice
+  on an existing one. The same real challenge above restricted its pickle
+  stream to a curated safe-opcode allowlist (via `pickletools.genops()`,
+  excluding `REDUCE`/`GLOBAL`/`BUILD` — everything that could call into
+  application code) immediately before deserializing — and flagmap's
+  default Unsafe Deserialization advice ("craft a payload with a reduce-
+  based gadget calling a shell command") is actively wrong there: that
+  payload gets rejected by the allowlist before the deserializer ever
+  runs it. If a validator-shaped call (name containing `validate`/
+  `sanitize`/`restrict`/`allowlist`/...) sharing the exact same argument
+  text runs immediately before the deserializing call in the same
+  function, the finding's advice is swapped to point at checking what
+  the allowlist still permits instead — in the motivating case, a
+  perfectly ordinary `pickle.dumps()` of a plain dict of booleans was
+  already enough to reach the intended result through the allowed
+  opcodes alone, no RCE gadget needed at all. Deliberately does not try
+  to judge whether the validator is actually sound — that would mean
+  understanding arbitrary hand-rolled filtering logic well enough to find
+  holes in it, which is closer to the actual security research this kind
+  of challenge is testing than something a textual heuristic should
+  responsibly claim to do. Python-only for now (pickle itself is a Python
+  concept; the equivalent guarded-deserialization idioms in PHP/Node/Ruby
+  are each their own ecosystem-specific shape, left for a future pass
+  rather than guessed at without a real example to design against).
+
 ## What it can't catch (on purpose)
 
 A few recurring bug shapes get found in testing over and over, confirmed as
@@ -1014,6 +1110,8 @@ flagmap/
     report_md.py            # standalone Markdown report renderer (--export-md, see "Sharing results with a team")
     diffscan.py              # two-snapshot file-diffing (--diff-against, see "Re-scanning a patched challenge")
     vendor_guard.py          # suppresses the noisiest rules on vendored/third-party library files (see "Architecture", added v1.14.0)
+    authn_guard.py           # best-effort missing-authentication-check check (see "Best-effort heuristics", added v1.15.0)
+    pickle_guard.py          # rewrites Unsafe Deserialization advice when a validator guards the pickle call (see "Best-effort heuristics", added v1.15.0)
     chains.py              # attack-path correlation over a scan's findings
     config_patterns.py    # the misconfiguration pattern database
     config_scanner.py      # file walking + checks (Dockerfile/nginx/.env/etc.)
@@ -1117,6 +1215,41 @@ file that exists only in `new/` (must appear) — plus a file that exists
 only in `old/`, to confirm a removed file doesn't crash or wrongly appear
 (it can't produce a finding in the new scan either way, so it's outside
 what this check even needs to assert).
+
+`authn_guard.py` gets a regular `ruleid`/`safe` fixture under
+`tests/fixtures/python/authn_cases.py` and `tests/fixtures/js/
+authn_cases.js` — same convention as every other AST-based check, since
+this one has a single line (the session-grant) to hang the marker on just
+like `idor.py`'s fixtures do. Each covers four shapes: the vulnerable case
+itself (identity read + session grant + no credential check), a safe
+twin with an otherwise-identical shape but a real `check_password_hash`/
+`bcrypt.compare` call (must NOT fire despite looking almost the same), a
+session-grant with no identity read at all (a refresh endpoint — must NOT
+fire), and an identity read with no session grant at all (a plain profile
+lookup — must NOT fire). Found and fixed a real self-referential bug in
+the Python fixture itself before it was considered done — its vulnerable
+case's own explanatory comment named the missing check by its usual
+literal term, which made that term appear inside the very function being
+asserted as unguarded and suppressed the finding the fixture existed to
+assert. The fix followed this project's established convention: describe
+what's absent without spelling out the term that would trigger the
+pattern meant to detect its absence.
+
+`pickle_guard.py` deliberately has **no** fixture category of its own, for
+the same reason `report_md.py` has none: `run_regression.py`'s harness
+only asserts which `vuln_name`s fire on which lines, never the text
+content of a finding's `why`/`payload` — and `pickle_guard.py` doesn't
+change whether anything fires, only rewrites the advice text on a finding
+that already does. There's no `ruleid`/`safe` marker convention that could
+express "this finding's advice text should mention the validator" without
+inventing a new assertion shape solely for one module, so this was instead
+verified directly: isolated test cases confirming the advice swap happens
+only when a validator-shaped call precedes the deserializing call sharing
+its argument, and gets left alone when either condition doesn't hold, plus
+direct confirmation against the real stubborne challenge's `server.py`
+that the `_sanitize_state`-guarded finding at line 105 gets the rewritten
+advice while the unguarded findings in `Login()`/`Profile()` keep their
+original RCE-gadget advice unchanged.
 
 **A third validation layer, beyond this repo's own fixtures**: hand-built
 fixtures only ever catch what whoever wrote them thought to write — they
@@ -1339,3 +1472,26 @@ on the normal `python3` interpreter's path, is the reliable way to run it.
   Renders the exact same findings/chains print_report() already computes,
   just as Markdown instead of terminal text, so there's no second
   detection code path to keep in sync — only a second renderer.
+- ~~Missing Authentication Check (a function that grants a session for a
+  claimed identity with no credential check at all)~~ — added in v1.15.0
+  via `authn_guard.py`, see "Architecture" and "Best-effort heuristics".
+  Not anticipated on this roadmap ahead of time either — found by testing
+  flagmap against a real attached CyberSci-style challenge whose `Login`
+  RPC had no password field on the request at all, just an unconditional
+  session grant for whatever username was supplied. A genuinely new
+  absence-of-a-check category, distinct from IDOR (no resource/ownership
+  concept here) and from the pre-existing Weak Auth Logic check (which
+  catches a credential check done *wrong*, not one that's entirely
+  missing).
+- ~~Correct the advice on an Unsafe Deserialization finding when a
+  hand-rolled validator actually guards the call~~ — added in v1.15.0 via
+  `pickle_guard.py`, see "Architecture" and "Best-effort heuristics". Not
+  a new finding or a suppressor — the same real challenge above restricted
+  its pickle stream to a safe-opcode allowlist immediately before
+  deserializing, making flagmap's default "craft a `__reduce__` gadget"
+  advice actively wrong for that call site; this swaps in advice about
+  checking what the allowlist still permits instead, without touching
+  whether the finding itself fires. Python-only for now — the same
+  guarded-deserialization idiom in PHP/Node/Ruby is each its own
+  ecosystem-specific shape, left open rather than guessed at without a
+  real example to design against.
