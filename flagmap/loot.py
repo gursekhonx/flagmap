@@ -53,6 +53,7 @@ from dataclasses import dataclass
 from typing import List
 
 from .patterns import SKIP_DIRS
+from .migration_guard import is_versioned_migration
 
 MAX_FILE_BYTES = 1_000_000
 
@@ -102,6 +103,14 @@ _SUFFIX_FINDINGS = [
     (".sqlite", "SQLite database file present", "Likely contains real table data — user records, password "
                                                  "hashes, or the flag itself. Open it directly."),
 ]
+
+# Which _SUFFIX_FINDINGS vuln_names migration_guard.is_versioned_migration
+# is allowed to suppress — see migration_guard.py's module docstring for
+# the two-signal naming-convention check and why both are required
+# together. Deliberately not applied to any other suffix finding here
+# (.bak/~/.swp/.orig stay unconditional; a migration script is never
+# mistaken for those).
+_MIGRATION_SUPPRESSIBLE = {"Database dump file present", "SQLite database file present"}
 
 # Content-based checks: (compiled regex, vuln_name, why, payload-ish hint).
 # Kept deliberately small and high-precision — see module docstring.
@@ -184,6 +193,8 @@ def _check_presence(dirpath: str, dirnames: List[str], filenames: List[str], roo
             continue
         for suffix, vuln_name, why in _SUFFIX_FINDINGS:
             if fname.endswith(suffix) and fname != suffix:
+                if vuln_name in _MIGRATION_SUPPRESSIBLE and is_versioned_migration(dirpath, fname):
+                    break
                 findings.append(LootFinding(file=full, line_no=0, line_text=fname, vuln_name=vuln_name, why=why,
                                              payload=f"Open {full} directly."))
                 break

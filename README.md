@@ -313,6 +313,29 @@ docstring/fixtures during development — the same recurring trap this
 project has hit with `loot.py`, `xxe_guard.py`, and `vendor_guard.py`
 before it.
 
+**Versioned-migration suppression for `loot.py`'s dump-file check
+(`migration_guard.py`, v1.18.0)** came out of testing flagmap against
+WebGoat (OWASP's own official Java training platform, the first real
+corpus tested after expanding into Java) — WebGoat ships each lesson's
+own schema setup as Flyway migrations
+(`src/main/resources/lessons/sqlinjection/db/migration/V2019_09_26_5__challenge_assignment.sql`,
+`src/main/resources/db/container/V1__init.sql`), and `loot.py`'s
+"Database dump file present" check — a bare `.sql` extension match,
+unconditionally — flagged all 15 of them as leaked data dumps, which
+they aren't: version-controlled DDL/seed scripts the challenge author
+committed on purpose. Like `vendor_guard.py`, this suppresses rather
+than removes a check, gated on two independent, deliberately
+conservative signals that must BOTH hold (filename follows a recognized
+migration-tool naming convention, AND the path sits under a
+`db`/`migration(s)`/`migrate`-named directory) — a real, abandoned dump
+file is extremely unlikely to satisfy both by accident, which is what
+keeps this from hiding a genuine leaked-dump finding. Confirmed as a
+true negative (still fires correctly) against a loose, non-conforming
+`.sql` file and against DVWA's own `database/*.sql` setup scripts, which
+don't follow the versioned-migration naming convention and so are
+correctly left alone — see "Best-effort heuristics" for the full
+two-signal rationale.
+
 **Misconfiguration scanning (`config_scanner.py`) stays regex-based for
 every file type**, deliberately — Dockerfiles, `nginx.conf`, `.env`, and
 similar config formats are simple key/value or directive-per-line formats
@@ -620,7 +643,12 @@ source itself was handed out, not bugs in the challenge's logic:
   the real file for anything redacted.
 - **Loose database dump files** (`.sql`, `.sqlite`, `.sqlite3`) — likely
   real table data: user records, password hashes, sometimes the flag
-  itself.
+  itself. Suppressed, added v1.18.0, for a `.sql` file that follows a
+  recognized versioned-migration naming convention (Flyway's
+  `V<version>__<description>.sql`, or a bare numeric prefix) AND sits
+  inside a `db`/`migration(s)`/`migrate`-named directory — a real
+  schema-setup script, not a leaked dump; see `migration_guard.py` and
+  "Best-effort heuristics".
 - **Hardcoded flag-shaped strings** (`flag{...}`/`CTF{...}` and
   case variants, requiring real alphanumeric content inside the braces —
   tightened after this check, run against flagmap's own source during
@@ -1090,6 +1118,41 @@ than flagging when a check seems absent.
   than the one the original id actually reaches, not necessarily the
   exact call next to it — see the module's docstring.
 
+- **Versioned-migration suppression for `loot.py`'s dump-file findings**
+  (`migration_guard.py`, added v1.18.0) — like `vendor_guard.py`,
+  suppresses rather than removes a check, this time `loot.py`'s
+  "Database dump file present"/"SQLite database file present" presence
+  checks. Found testing flagmap against WebGoat: 15 legitimate Flyway
+  migration scripts
+  (`src/main/resources/lessons/sqlinjection/db/migration/V2019_09_26_5__challenge_assignment.sql`,
+  `src/main/resources/db/container/V1__init.sql`, ...) all fired as
+  "leaked data dump" findings, purely from the bare `.sql` extension
+  match. Unlike `vendor_guard.py`'s four signals (any ONE is enough),
+  this requires BOTH of its two signals together before suppressing: (1)
+  the filename follows a recognized migration-tool versioned-naming
+  convention — Flyway's `V<version>__<description>.sql` (digits,
+  optionally `.`/`_`-separated, then a literal `__`), or a bare
+  numeric-prefix convention (`001_create_users.sql`); (2) the path
+  contains a `db`/`migration(s)`/`migrate` directory segment. The plain
+  `db` segment (not just `migration`/`migrate`) is deliberately included
+  because Flyway only *defaults* to `db/migration` — a project can point
+  it anywhere, and in WebGoat's own case the container-setup script sits
+  under `db/container`, not anything with "migration" in the name at
+  all. Requiring both signals together, rather than either alone, is
+  what keeps a real dump dropped somewhere unrelated (`backup.sql` in an
+  uploads folder, or even a `V1__init.sql`-named file sitting outside
+  any `db`/migration-style directory) from being hidden by accident —
+  confirmed still fires correctly in both of those cases, and verified
+  true-negative (no change in findings) against DVWA's own
+  `database/*.sql` setup scripts, which don't follow the
+  versioned-migration naming convention at all. Naming-convention-only,
+  never content-based — this module never opens the file, same
+  limitation `vendor_guard.py`'s own filename signals accept: a real
+  dump deliberately renamed to look like a migration and dropped into a
+  `db/migration/`-style folder would slip past undetected. That's an
+  intentional tradeoff in favor of never hiding a true positive, not an
+  oversight.
+
 ## What it can't catch (on purpose)
 
 A few recurring bug shapes get found in testing over and over, confirmed as
@@ -1213,6 +1276,7 @@ flagmap/
     pickle_guard.py          # rewrites Unsafe Deserialization advice when a validator guards the pickle call (see "Best-effort heuristics", added v1.15.0)
     sql_construct.py         # PHP SQL-construction-site matching for "." concatenation / inline interpolation (see "Architecture", added v1.15.0)
     owner_param_guard.py     # upgrades an IDOR finding when the ownership filter itself is request-sourced (see "Best-effort heuristics", added v1.16.0)
+    migration_guard.py       # suppresses loot.py's dump-file finding for recognized versioned-migration scripts (see "Best-effort heuristics", added v1.18.0)
     chains.py              # attack-path correlation over a scan's findings
     config_patterns.py    # the misconfiguration pattern database
     config_scanner.py      # file walking + checks (Dockerfile/nginx/.env/etc.)
@@ -1256,6 +1320,23 @@ the set listed — not "at least these", so a stray new false positive
 (like `loot.py`'s own docstring once tripping its own flag-shaped-string
 check during development) fails the suite just as loudly as a missed
 true positive would.
+
+`migration_guard.py`'s suppression gets two more `tests/fixtures/loot/`
+cases rather than one, specifically because the harness's set-equality
+check can't distinguish "this file's finding was correctly suppressed"
+from "a different file in the same tree produced the same finding
+anyway" — a single case mixing a suppressed migration script with a
+genuine loose dump would pass even if the suppression silently broke,
+since the dump's own finding keeps the vuln_name in the expected set
+regardless. `case2`'s `app/` holds only two Flyway-convention scripts
+(`db/migration/V1__init.sql` and the broader `db/container/V2__seed.sql`
+signal) and its `EXPECTED.txt` is empty — this is what actually proves
+suppression fires, since any regression shows up as an unexpected
+"Database dump file present" appearing where the set must stay empty.
+`case3`'s `app/` holds only a loose `dump.sql` and a `V1__init.sql`
+sitting in a plain `uploads/` folder (right filename, wrong directory)
+— `EXPECTED.txt` lists "Database dump file present" for both, proving
+the two-signals-required-together logic isn't quietly dropped to one.
 
 `deps.py` reuses the exact same `EXPECTED.txt` + `app/` convention under
 `tests/fixtures/deps/<case>/`, for the same reason (a manifest/lockfile
@@ -1640,3 +1721,15 @@ on the normal `python3` interpreter's path, is the reliable way to run it.
   loosened suppression — widening `idor.py`'s own ownership vocabulary to
   recognize this shape as "a real check" would have made the finding
   disappear entirely, which is the opposite of what was needed.
+- ~~Suppress `loot.py`'s "Database dump file present" check for a
+  legitimate, version-controlled schema-migration script~~ — added in
+  v1.18.0 via `migration_guard.py`, see "Architecture" and "Best-effort
+  heuristics". Found testing flagmap against WebGoat (Java) — 15 Flyway
+  migration scripts following the standard `V<version>__<description>.sql`
+  convention all fired as "leaked data dump" findings purely from the
+  bare `.sql` extension. Requires two independent naming-convention
+  signals together (recognized versioned filename AND a
+  `db`/`migration(s)`/`migrate` directory segment) before suppressing,
+  specifically so a real abandoned dump can't be hidden by accident —
+  same discipline as `vendor_guard.py`'s own conservative, filename-only
+  signals.
