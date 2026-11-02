@@ -336,6 +336,43 @@ don't follow the versioned-migration naming convention and so are
 correctly left alone — see "Best-effort heuristics" for the full
 two-signal rationale.
 
+**jQuery DOM-method false positives in idor.py's bare-parameter-name
+fallback (`jquery_dom_guard.py`, v1.19.0)** — also found testing flagmap
+against WebGoat, in two of its JS files rather than its Java lessons:
+`static/js/goatApp/view/MenuView.js` (WebGoat's own hand-written
+front-end) and the bundled `static/js/libs/jquery-ui-1.10.4.js`. Both
+have a function taking a parameter literally named `id` — an HTML
+element id, not a database row id — whose body calls jQuery's own
+`.find()` DOM-selector method, which textually matches `idor.py`'s
+`LOOKUP_SINK_RE` (there for `Model.find(id)`-style ORM calls). This only
+reaches `idor.py`'s bare-parameter-name fallback path — the one designed
+for the Flask/Express/Rails route-bound-id idiom when no
+`req.params`/`request.args`-style extraction call exists anywhere in the
+body — so `jquery_dom_guard.py` suppresses a fallback-only finding when
+the whole file shows no sign of being server-route code at all (no
+`req.`/`res.`/`request.`/`response.` reference, no
+`require("express"/...)`, no `app.get(`/`router.get(`-style call
+anywhere). That whole-file scan has its own false positive, caught
+during this fix's own development: jQuery UI's real Autocomplete widget
+names its `source` callback `function(request, response)` as a plain
+variable-naming convention with nothing to do with HTTP, which made the
+whole-file scan treat jquery-ui-1.10.4.js as server-side and never reach
+the real false positive a few hundred lines later in the same file.
+Fixed by reusing `vendor_guard.py`'s own, independently-tested
+`is_vendor_file()` as a bypass: a file it already recognizes as vendored
+skips the server-signal scan entirely, since bundled library code can
+coincidentally use `request`/`response` as ordinary local names for
+reasons that have nothing to do with being a route handler. Deliberately
+scoped to only the bare-parameter-name fallback path — an explicit
+`req.params.id`-style extraction anywhere in the function is left
+completely untouched, since that's strong, specific evidence the
+function really is handling an HTTP request, and narrowing
+`LOOKUP_SINK_RE`'s vocabulary there would risk false negatives on real
+Express/Rails IDOR bugs. Confirmed true-negative (same finding counts as
+before) against DVWA, Juice Shop, and Mutillidae's own IDOR findings,
+including that Juice Shop's `payment.ts`/`address.ts`/`wallet.ts`
+upgrades from `owner_param_guard.py` above are untouched.
+
 **Misconfiguration scanning (`config_scanner.py`) stays regex-based for
 every file type**, deliberately — Dockerfiles, `nginx.conf`, `.env`, and
 similar config formats are simple key/value or directive-per-line formats
@@ -429,7 +466,12 @@ Ruby/Rails, Lua, Rust):
   added v1.16.0, when the same function's lookup DOES filter by a
   per-user ownership key whose own value is read straight from the
   request rather than the session — see `owner_param_guard.py` and
-  "Best-effort heuristics")
+  "Best-effort heuristics". A JS-specific false positive suppressed,
+  added v1.19.0: the bare-id-named-parameter fallback no longer fires on
+  a plain client-side function whose only "lookup-shaped call" is a
+  jQuery DOM method (`.find()`, etc.) textually colliding with the
+  lookup-sink vocabulary, in a file with no server-route signal anywhere
+  — see `jquery_dom_guard.py` and "Best-effort heuristics")
 - Missing Authentication Check (best-effort, added v1.15.0, Python/JS/
   PHP/Go/Java/Ruby: a function that reads a username/email/login value
   straight from the request AND grants a new session/token/cookie
@@ -1153,6 +1195,41 @@ than flagging when a check seems absent.
   intentional tradeoff in favor of never hiding a true positive, not an
   oversight.
 
+- **jQuery DOM-method false positives in the IDOR fallback path**
+  (`jquery_dom_guard.py`, added v1.19.0) — removes (not downgrades —
+  there's no sharper advice to give on a finding that shouldn't exist)
+  an existing "Missing Authorization / IDOR" finding when it came from
+  `idor.py`'s bare-id-parameter-name fallback (designed for the Flask/
+  Express/Rails route-bound-id idiom, see `idor.py`'s own docstring) in
+  a plain client-side JS function. Found testing flagmap against
+  WebGoat's `static/js/goatApp/view/MenuView.js` and bundled
+  `static/js/libs/jquery-ui-1.10.4.js`: both have a function taking a
+  parameter literally named `id` (an HTML element id) that calls
+  jQuery's own `.find()` — which textually matches `LOOKUP_SINK_RE`'s
+  `find(`-for-ORM-calls vocabulary purely by coincidence. Suppresses
+  only when BOTH (1) no explicit `req.params.id`-style extraction call
+  (idor.py's own `ID_PARAM_RE`) exists anywhere in the enclosing
+  function — that's left completely untouched, since it's strong,
+  specific evidence this really is server-route code, and narrowing the
+  lookup-sink vocabulary there would risk false negatives on real
+  Express/Rails IDOR bugs — AND (2) no sign of server-route code (no
+  `req.`/`res.`/`request.`/`response.` reference, no
+  `require("express"/...)`, no `app.get(`/`router.get(`-style call)
+  anywhere in the whole file. Signal (2) is skipped entirely, straight
+  to signal (1), for a file `vendor_guard.py`'s own `is_vendor_file()`
+  already recognizes as vendored by filename/content convention — this
+  is what actually let the fix reach jQuery UI's own false positive:
+  its real Autocomplete widget names its `source` callback
+  `function(request, response)` as an ordinary variable-naming
+  convention with nothing to do with HTTP, which first made the
+  whole-file scan wrongly treat the entire bundled library as
+  server-side and never reach the real false positive at all — caught
+  during this fix's own development, the same self-review discipline
+  every precision guard in this project has needed at least once.
+  Confirmed true-negative against DVWA, Mutillidae, and Juice Shop's own
+  IDOR findings (including the `owner_param_guard.py` upgrades above,
+  all unaffected).
+
 ## What it can't catch (on purpose)
 
 A few recurring bug shapes get found in testing over and over, confirmed as
@@ -1277,6 +1354,7 @@ flagmap/
     sql_construct.py         # PHP SQL-construction-site matching for "." concatenation / inline interpolation (see "Architecture", added v1.15.0)
     owner_param_guard.py     # upgrades an IDOR finding when the ownership filter itself is request-sourced (see "Best-effort heuristics", added v1.16.0)
     migration_guard.py       # suppresses loot.py's dump-file finding for recognized versioned-migration scripts (see "Best-effort heuristics", added v1.18.0)
+    jquery_dom_guard.py      # suppresses idor.py's fallback IDOR finding when it's really a jQuery DOM-method collision (see "Best-effort heuristics", added v1.19.0)
     chains.py              # attack-path correlation over a scan's findings
     config_patterns.py    # the misconfiguration pattern database
     config_scanner.py      # file walking + checks (Dockerfile/nginx/.env/etc.)
@@ -1455,6 +1533,33 @@ confirmation against the real Juice Shop files that motivated it
 (`payment.ts`/`address.ts`/`wallet.ts`, all upgraded) and true-negative
 confirmation against DVWA and Mutillidae (zero upgrades in either, despite
 both having their own IDOR-adjacent findings).
+
+`jquery_dom_guard.py` gets two new standalone fixture files rather than a
+case added to `idor_cases.js`, because the suppression only applies to a
+file with NO server-route signal anywhere, and `idor_cases.js` is wall-
+to-wall `app.get(`/`req.`/`res.` by design — adding a case there would
+never actually exercise the suppression at all.
+`tests/fixtures/js/clientside_dom_cases.js` holds the main motivating
+shape (bare `id` parameter, jQuery `.find()`, zero server signals) with
+a `safe: Missing Authorization / IDOR` marker on the finding's own
+anchor line (the function's signature line itself, since this only ever
+fires via idor.py's bare-parameter fallback, which has no extraction
+call to point at instead). Writing that fixture's own module comment
+caught a live instance of the exact self-referential trap this project
+keeps hitting — the comment originally spelled out the literal `req.`/
+`res.`/`request.`/`response.` trigger text while describing their
+absence, which made the file match its own suppression's gating check
+and silently fail to prove anything; rephrased without spelling out the
+trigger shapes, same fix pattern as `loot.py`'s and `vendor_guard.py`'s
+own docstrings before it.
+`tests/fixtures/js/jquery-widget-fake.js` is named to match
+`vendor_guard.py`'s own jQuery-plugin filename convention specifically
+to exercise the `is_vendor_file()` bypass path: it includes the
+`function(request, response)` red herring that originally blocked this
+fix in the real jQuery UI file, right alongside the real false-positive
+shape, so a regression that drops the vendor bypass shows up as a
+missing `safe` assertion rather than silently stopping being tested at
+all.
 
 **A third validation layer, beyond this repo's own fixtures**: hand-built
 fixtures only ever catch what whoever wrote them thought to write — they
@@ -1733,3 +1838,17 @@ on the normal `python3` interpreter's path, is the reliable way to run it.
   specifically so a real abandoned dump can't be hidden by accident —
   same discipline as `vendor_guard.py`'s own conservative, filename-only
   signals.
+- ~~Suppress idor.py's bare-parameter-name-fallback IDOR finding when
+  it's really a jQuery DOM-method name collision~~ — added in v1.19.0
+  via `jquery_dom_guard.py`, see "Architecture" and "Best-effort
+  heuristics". Also found testing flagmap against WebGoat, this time in
+  two JS files: WebGoat's own `MenuView.js` and the bundled
+  `jquery-ui-1.10.4.js`, both with a function taking a parameter
+  literally named `id` (an HTML element id) whose jQuery `.find()` call
+  textually matches `LOOKUP_SINK_RE`'s ORM vocabulary. Suppresses only
+  when no explicit request-extraction call exists in the function AND
+  no server-route signal exists anywhere in the file — reusing
+  `vendor_guard.py`'s own `is_vendor_file()` as a bypass for that second
+  check once jQuery UI's real Autocomplete widget (`function(request,
+  response)`, an ordinary naming convention with nothing to do with
+  HTTP) turned out to defeat a naive version of it.
