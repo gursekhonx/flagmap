@@ -224,6 +224,44 @@ flagmap treats a vendor-shaped file any differently, so a real taint-
 tracked finding (SQLi, SSRF, ...) inside one still fires exactly as
 before.
 
+**SQL-construction-site matching for PHP "." concatenation and inline
+interpolation (`sql_construct.py`, v1.15.0)** came out of testing flagmap
+against OWASP Mutillidae II — the first fresh real-world repo tested
+since the DVWA/NodeGoat/Pygoat/RailsGoat/DVWS-Node pass that found the
+v1.13.0/v1.14.0 fixes. Mutillidae's `classes/SQLQueryHandler.php` is a
+textbook DAO/handler class: every one of its ~15 query-building methods
+(`getUserAccount`, `getUserAccountByID`, `getAccountByClientId`,
+`authenticateByClientCredentials`, ...) assembles a raw SQL string by
+joining literal fragments with a function parameter via PHP's "."
+operator or inline `"...$var..."` interpolation, split across 2-4
+physical lines for readability — and flagmap's SQL Injection coverage
+came back with **zero** findings anywhere in that file, despite it being
+packed with exactly the SQL injection the whole class exists to
+demonstrate. Both of patterns.py's PHP SQL-Injection regexes structurally
+could not reach this shape: one needs the dangerous call itself on the
+same physical line as the literal string, the other needs the assigned-to
+variable literally named `$sql`/`$query` *and* the concatenated value to
+be a `$_GET`/`$_POST`/etc. superglobal by name, on that one line. Here the
+sink is a custom wrapper method (`executeQuery()` — not a name flagmap's
+sink list can safely recognize without colliding with every other
+`execute*`-named method in any other codebase), the variable is named
+`$lQueryString`, the tainted-looking values are function parameters, and
+the query spans several lines. `sql_construct.py` walks the same
+tree-sitter parse tree every other AST-based check in this file already
+builds, looking for a "." concatenation chain or an inline-interpolated
+`encapsed_string` whose literal portions read as a SQL query shape
+(`SELECT...FROM`/`INSERT...INTO`/`UPDATE...SET`/`DELETE...FROM`) and which
+joins in at least one non-literal operand — the same "match the query's
+own shape, not provable taint" philosophy patterns.py's existing Python
+f-string/JS template-literal construction-site rules already use,
+extended to a language whose construction-site queries routinely span
+more than one physical line. Verified against DVWA as an adversarial
+precision check (chosen because its `impossible.php` reference files are
+exactly the corpus that caught the v1.13.0 false positive): 38 raw hits
+across DVWA's PHP tree, every one in a `low.php`/`medium.php`/`high.php`
+intentionally-vulnerable file or its setup/seed-data code, zero in any
+`impossible.php` file.
+
 **Missing Authentication Check (`authn_guard.py`, v1.15.0) and guarded-
 deserialization advice (`pickle_guard.py`, v1.15.0)** both came out of
 testing flagmap against a real attached CTF challenge rather than a
@@ -279,7 +317,10 @@ tree-sitter-ruby tree-sitter-lua tree-sitter-rust` (also listed in
 Ruby/Rails, Lua, Rust):
 
 - SQL Injection (string-built queries, including a simple "variable assigned
-  from user input, used a few lines later" taint check)
+  from user input, used a few lines later" taint check, and — PHP only,
+  added v1.15.0, see `sql_construct.py` and "Architecture" — a query built
+  via "." concatenation or inline interpolation spanning multiple physical
+  lines, independent of patterns.py's single-line regexes)
 - Command Injection / RCE (`system`, `exec`, `eval`, `shell_exec`, etc.)
 - Unsafe Deserialization (`pickle.loads`, PHP `unserialize`, `yaml.load`,
   `node-serialize`)
@@ -1112,6 +1153,7 @@ flagmap/
     vendor_guard.py          # suppresses the noisiest rules on vendored/third-party library files (see "Architecture", added v1.14.0)
     authn_guard.py           # best-effort missing-authentication-check check (see "Best-effort heuristics", added v1.15.0)
     pickle_guard.py          # rewrites Unsafe Deserialization advice when a validator guards the pickle call (see "Best-effort heuristics", added v1.15.0)
+    sql_construct.py         # PHP SQL-construction-site matching for "." concatenation / inline interpolation (see "Architecture", added v1.15.0)
     chains.py              # attack-path correlation over a scan's findings
     config_patterns.py    # the misconfiguration pattern database
     config_scanner.py      # file walking + checks (Dockerfile/nginx/.env/etc.)
@@ -1234,6 +1276,16 @@ asserted as unguarded and suppressed the finding the fixture existed to
 assert. The fix followed this project's established convention: describe
 what's absent without spelling out the term that would trigger the
 pattern meant to detect its absence.
+
+`sql_construct.py` gets regular `ruleid`/`safe` entries inside the
+existing `tests/fixtures/php/vuln_sinks.php` and `clean_sinks.php` files
+rather than a category of its own — it produces ordinary "SQL Injection"
+findings, just reached a different way, so it fits the same convention
+every other AST-based PHP check already uses. Three cases: a multi-line
+"." concatenation (the actual Mutillidae shape), a single-line inline
+interpolation, and a safe case proving the "at least one non-literal
+operand" gate — a "." chain joining only string literals, with no
+variable anywhere in it — correctly produces nothing.
 
 `pickle_guard.py` deliberately has **no** fixture category of its own, for
 the same reason `report_md.py` has none: `run_regression.py`'s harness
@@ -1495,3 +1547,13 @@ on the normal `python3` interpreter's path, is the reliable way to run it.
   guarded-deserialization idiom in PHP/Node/Ruby is each its own
   ecosystem-specific shape, left open rather than guessed at without a
   real example to design against.
+- ~~Catch SQL built via PHP string concatenation/interpolation spanning
+  more than one physical line~~ — added in v1.15.0 via `sql_construct.py`,
+  see "Architecture". Found by testing flagmap against OWASP Mutillidae
+  II — a whole DAO class (`SQLQueryHandler.php`) full of exactly the SQL
+  injection it exists to demonstrate, every instance of it built via "."
+  concatenation or inline interpolation across 2-4 physical lines, and
+  flagmap's existing single-line PHP regexes couldn't reach any of it.
+  Python's "+"/"%" and JS's "+" string concatenation can span multiple
+  lines the same way — left open, same discipline as everything else
+  here, until a real example motivates it rather than guessing ahead.

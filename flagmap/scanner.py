@@ -12,6 +12,7 @@ from .csrf import find_missing_csrf
 from .idor import find_idor_candidates, IDOR_LANGUAGES
 from .authn_guard import find_missing_authn_candidates, AUTHN_GUARD_LANGUAGES
 from .pickle_guard import annotate_guarded_pickle_loads
+from .sql_construct import find_sql_construction, SQL_CONSTRUCT_LANGUAGES
 from .config_scanner import scan_config_path
 from .heredoc import iter_heredoc_sources
 from .loot import find_loot
@@ -301,6 +302,34 @@ def scan_lines(path: str, language: str, lines: List[str], patterns: list) -> Li
     # "craft a __reduce__ gadget" advice can be actively wrong for a
     # pickle call site that's already gated by a hand-rolled check.
     annotate_guarded_pickle_loads(language, source_bytes, lines, findings)
+
+    # best-effort SQL-construction-site check: a PHP string built via "."
+    # concatenation or inline interpolation, spanning more than one
+    # physical line, whose literal portions read as a SQL query and which
+    # joins in at least one variable — patterns.py's line-by-line regexes
+    # can't reach this shape at all. See sql_construct.py's module
+    # docstring for exactly what this does and doesn't try to prove.
+    if language in SQL_CONSTRUCT_LANGUAGES:
+        for scf in find_sql_construction(path, language, source_bytes, lines):
+            key = (scf.line_no, "SQL Injection")
+            if key in seen:
+                continue
+            seen.add(key)
+            findings.append(Finding(
+                file=scf.file,
+                line_no=scf.line_no,
+                line_text=scf.line_text,
+                vuln_name="SQL Injection",
+                severity="high",
+                why="A SQL query is being assembled via string concatenation or inline interpolation, joining "
+                    "in at least one variable/expression — this reads the query's own shape (SELECT...FROM/"
+                    "INSERT...INTO/UPDATE...SET/DELETE...FROM plus an interpolated value), not whether that "
+                    "value is provably user-controlled, so this fires even for a query spanning multiple "
+                    "physical lines, assigned to any variable name, and passed to a custom wrapper method "
+                    "patterns.py's sink list wouldn't recognize by name.",
+                payload="' OR '1'='1' -- -",
+                confidence="likely",
+            ))
 
     return findings
 

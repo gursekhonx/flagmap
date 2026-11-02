@@ -82,3 +82,28 @@ function xxe() {
     $xml = simplexml_load_string($_POST['xml']);  // ruleid: XML External Entity (XXE)
     return $xml;
 }
+
+function sqlConstructMultiLine() {
+    // the Mutillidae II SQLQueryHandler.php shape: a query assembled via
+    // "." concatenation across several physical lines, assigned to a
+    // variable patterns.py's regexes don't special-case ($query/$sql only),
+    // then passed to a custom wrapper method name patterns.py's sink list
+    // doesn't recognize at all — see sql_construct.py's module docstring.
+    global $conn;
+    $username = $_GET['username'];
+    $query = "SELECT * FROM accounts " .  // ruleid: SQL Injection
+        "WHERE username='" . $username .
+        "'";
+    return $conn->runQuery($query);
+}
+
+function sqlConstructInlineInterp() {
+    // the other shape sql_construct.py covers: PHP double-quoted-string
+    // inline interpolation, with no "." operator anywhere on the line —
+    // patterns.py's rules require either the sink call or a $_GET/etc.
+    // superglobal on the same line, neither of which is true here.
+    global $conn;
+    $username = $_GET['username'];
+    $query = "SELECT * FROM accounts WHERE username='$username'";  // ruleid: SQL Injection
+    return $conn->runQuery($query);
+}

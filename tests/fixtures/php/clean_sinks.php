@@ -74,3 +74,15 @@ function readFileSafeCast() {
     $fname = (int)$fname;
     fopen($fname, "r");  // safe: Path Traversal / LFI
 }
+
+function sqlConstructNoVariableSafe() {
+    // sql_construct.py's other gate: a SQL-shaped string built via "."
+    // concatenation is fine when every operand is itself a string literal
+    // — no variable/expression anywhere in the chain means nothing for an
+    // attacker to ever control, regardless of how the string is split
+    // across lines or tokens.
+    global $conn;
+    $query = "SELECT * FROM accounts " .
+        "WHERE username='admin'";  // safe: SQL Injection
+    return $conn->runQuery($query);
+}
