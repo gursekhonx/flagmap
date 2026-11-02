@@ -13,6 +13,7 @@ from .idor import find_idor_candidates, IDOR_LANGUAGES
 from .authn_guard import find_missing_authn_candidates, AUTHN_GUARD_LANGUAGES
 from .pickle_guard import annotate_guarded_pickle_loads
 from .sql_construct import find_sql_construction, SQL_CONSTRUCT_LANGUAGES
+from .owner_param_guard import annotate_bypassable_ownership
 from .config_scanner import scan_config_path
 from .heredoc import iter_heredoc_sources
 from .loot import find_loot
@@ -267,6 +268,14 @@ def scan_lines(path: str, language: str, lines: List[str], patterns: list) -> Li
                         "their data.",
                 confidence="possible",
             ))
+
+    # Upgrades, in place, any "Missing Authorization / IDOR" finding whose
+    # own line also filters by a user/owner/account-id-shaped key sourced
+    # straight from the request (not the session) — a "check" that's just
+    # as attacker-controlled as the id it's supposedly protecting. See
+    # owner_param_guard.py's module docstring for exactly what this does
+    # and doesn't try to prove.
+    annotate_bypassable_ownership(language, source_bytes, lines, findings)
 
     # best-effort Missing Authentication Check: a function that reads a
     # username/identity claim straight from the request and grants a new

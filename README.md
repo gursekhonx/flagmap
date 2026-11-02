@@ -262,6 +262,28 @@ across DVWA's PHP tree, every one in a `low.php`/`medium.php`/`high.php`
 intentionally-vulnerable file or its setup/seed-data code, zero in any
 `impossible.php` file.
 
+**TypeScript parsing, confirmed rather than assumed (v1.16.0)**:
+`EXTENSION_LANGUAGE` has always mapped `.ts` to the `"js"` language, and
+`ast_engine.py` has never had a dedicated `tree-sitter-typescript`
+grammar — `.ts` files are parsed with plain `tree-sitter-javascript`,
+which doesn't understand TypeScript-only syntax (type annotations,
+interfaces, generics, decorators). This was never actually tested
+against a real TypeScript codebase before OWASP Juice Shop (the first
+JS/TS real-world target tested, see "Testing") — and it turned out to
+work well enough in practice: `tree-sitter-javascript` is fault-tolerant
+rather than crashing on unrecognized syntax, and the TypeScript-specific
+parts a route handler actually needs flagmap to see through (object
+literals, template-literal/string-concatenation sink arguments, function/
+callback boundaries for the AST-based checks) parse correctly regardless
+of the type annotations layered around them. Both of Juice Shop's famous
+SQLi routes (`routes/login.ts`, `routes/search.ts`) were caught correctly,
+and `idor.py`'s function-boundary detection worked well enough on real
+`.ts` route handlers for `owner_param_guard.py` (below) to be built and
+verified against them. Not a guarantee that every TypeScript construct
+parses cleanly — just confirmation, from a real and fairly large
+TypeScript codebase, that the existing `.ts` → `"js"` mapping was never
+the gap it might have looked like on paper.
+
 **Missing Authentication Check (`authn_guard.py`, v1.15.0) and guarded-
 deserialization advice (`pickle_guard.py`, v1.15.0)** both came out of
 testing flagmap against a real attached CTF challenge rather than a
@@ -380,7 +402,11 @@ Ruby/Rails, Lua, Rust):
   function or the decorator/annotation above it. A bare login-required
   check does NOT count as that ownership check — see "Best-effort
   heuristics" for exactly what does and the real false-positive/negative
-  tradeoffs of a check this coarse)
+  tradeoffs of a check this coarse. Upgraded to "likely" confidence,
+  added v1.16.0, when the same function's lookup DOES filter by a
+  per-user ownership key whose own value is read straight from the
+  request rather than the session — see `owner_param_guard.py` and
+  "Best-effort heuristics")
 - Missing Authentication Check (best-effort, added v1.15.0, Python/JS/
   PHP/Go/Java/Ruby: a function that reads a username/email/login value
   straight from the request AND grants a new session/token/cookie
@@ -1032,6 +1058,38 @@ than flagging when a check seems absent.
   are each their own ecosystem-specific shape, left for a future pass
   rather than guessed at without a real example to design against).
 
+- **Bypassable-ownership upgrade** (`owner_param_guard.py`, added
+  v1.16.0) — like `pickle_guard.py`, not a new finding, a confidence
+  upgrade on an existing one. Found testing flagmap against OWASP Juice
+  Shop (JS/TS): `routes/payment.ts`, `address.ts`, and `wallet.ts` all
+  share the exact same shape —
+  `CardModel.findOne({ where: { id: req.params.id, UserId: req.body.UserId } })`.
+  `idor.py` correctly flags this (an id read from the request handed to a
+  lookup call) at the usual "possible" confidence, with why-text saying
+  there's no sign of an ownership check — not quite right here: there IS
+  a per-user filter, `UserId: req.body.UserId`, `idor.py`'s
+  `OWNERSHIP_HINT_RE` just doesn't recognize camelCase `UserId` (it only
+  matches the literal `user_id` spelling). The tempting "fix" — widen
+  `OWNERSHIP_HINT_RE` to recognize `UserId` too — would make things
+  *worse*: idor.py would then treat this as a real check and go silent,
+  missing the actual bug. The ownership value itself, `req.body.UserId`,
+  is just as attacker-controlled as the `id` it's supposedly protecting:
+  changing one request field reads or edits anyone's card, address, or
+  wallet. So instead of loosening the suppression, `owner_param_guard.py`
+  searches the IDOR finding's whole enclosing function (same AST
+  scope-walk idiom as `idor.py`/`pickle_guard.py`) for a user/owner/
+  account-id-shaped key whose own value comes from the same per-language
+  request-read idioms `idor.py`'s `ID_PARAM_RE` already recognizes (not
+  `req.user`/`current_user`/session reads — those are the legitimate,
+  trusted form of the same check), and when found, raises the finding to
+  "likely" with sharper, more specific advice. Confirmed true-negative
+  against DVWA and Mutillidae (no upgrades fired in either). Known
+  precision tradeoff, found in practice against Juice Shop's large
+  `placeOrder()` handler: searching the *whole* function means the
+  upgrade can be triggered by a bypassable filter on a different lookup
+  than the one the original id actually reaches, not necessarily the
+  exact call next to it — see the module's docstring.
+
 ## What it can't catch (on purpose)
 
 A few recurring bug shapes get found in testing over and over, confirmed as
@@ -1154,6 +1212,7 @@ flagmap/
     authn_guard.py           # best-effort missing-authentication-check check (see "Best-effort heuristics", added v1.15.0)
     pickle_guard.py          # rewrites Unsafe Deserialization advice when a validator guards the pickle call (see "Best-effort heuristics", added v1.15.0)
     sql_construct.py         # PHP SQL-construction-site matching for "." concatenation / inline interpolation (see "Architecture", added v1.15.0)
+    owner_param_guard.py     # upgrades an IDOR finding when the ownership filter itself is request-sourced (see "Best-effort heuristics", added v1.16.0)
     chains.py              # attack-path correlation over a scan's findings
     config_patterns.py    # the misconfiguration pattern database
     config_scanner.py      # file walking + checks (Dockerfile/nginx/.env/etc.)
@@ -1302,6 +1361,19 @@ direct confirmation against the real stubborne challenge's `server.py`
 that the `_sanitize_state`-guarded finding at line 105 gets the rewritten
 advice while the unguarded findings in `Login()`/`Profile()` keep their
 original RCE-gadget advice unchanged.
+
+`owner_param_guard.py` gets a regular `ruleid` case added to
+`tests/fixtures/js/idor_cases.js` (the shape still has to fire as an
+ordinary "Missing Authorization / IDOR" finding either way, which the
+harness CAN assert) — but, same reasoning as `pickle_guard.py` immediately
+above, the confidence upgrade itself has no fixture category of its own,
+since the harness only checks vuln_name presence per line, never
+confidence or why/payload text. Verified directly instead: the new fixture
+case confirmed at "likely" via a direct `scan_path()` check, plus
+confirmation against the real Juice Shop files that motivated it
+(`payment.ts`/`address.ts`/`wallet.ts`, all upgraded) and true-negative
+confirmation against DVWA and Mutillidae (zero upgrades in either, despite
+both having their own IDOR-adjacent findings).
 
 **A third validation layer, beyond this repo's own fixtures**: hand-built
 fixtures only ever catch what whoever wrote them thought to write — they
@@ -1557,3 +1629,14 @@ on the normal `python3` interpreter's path, is the reliable way to run it.
   Python's "+"/"%" and JS's "+" string concatenation can span multiple
   lines the same way — left open, same discipline as everything else
   here, until a real example motivates it rather than guessing ahead.
+- ~~Recognize an IDOR "ownership check" that's itself bypassable because
+  its value comes from the request, not the session~~ — added in v1.16.0
+  via `owner_param_guard.py`, see "Best-effort heuristics". Found testing
+  flagmap against OWASP Juice Shop (the first JS/TS real-world target
+  tested — see "Testing"): several routes filter a lookup by both an id
+  AND a `UserId` field, but that `UserId` is read straight from the
+  request body, making the "check" exactly as attacker-controlled as the
+  id. Deliberately an upgrade on the existing IDOR finding, not a
+  loosened suppression — widening `idor.py`'s own ownership vocabulary to
+  recognize this shape as "a real check" would have made the finding
+  disappear entirely, which is the opposite of what was needed.
