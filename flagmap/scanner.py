@@ -16,6 +16,7 @@ from .sql_construct import find_sql_construction, SQL_CONSTRUCT_LANGUAGES
 from .owner_param_guard import annotate_bypassable_ownership
 from .jquery_dom_guard import filter_clientside_js_false_idor
 from .ssrf_fetch_guard import filter_clientside_js_false_ssrf
+from .log_message_guard import filter_log_message_false_positive
 from .config_scanner import scan_config_path
 from .heredoc import iter_heredoc_sources
 from .loot import find_loot
@@ -295,6 +296,14 @@ def scan_lines(path: str, language: str, lines: List[str], patterns: list) -> Li
     # ssrf_fetch_guard.py's module docstring for exactly what this does
     # and doesn't try to prove.
     findings = filter_clientside_js_false_ssrf(path, language, lines, findings)
+
+    # Removes any "Sensitive Data Exposure in Logs" finding whose keyword
+    # match came entirely from inside a quoted string literal (a
+    # human-readable log message mentioning "password"/etc. in its own
+    # prose) rather than a real variable/property reference. See
+    # log_message_guard.py's module docstring for exactly what this does
+    # and doesn't try to prove.
+    findings = filter_log_message_false_positive(language, lines, findings)
 
     # best-effort Missing Authentication Check: a function that reads a
     # username/identity claim straight from the request and grants a new

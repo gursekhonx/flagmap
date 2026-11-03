@@ -412,6 +412,34 @@ tested so far. Confirmed true-negative against the project's own
 against DVWA/Juice Shop/Mutillidae's own SSRF findings — none of which
 are JS, so none were ever in scope for this guard to begin with.
 
+**Log-message-string false positives in "Sensitive Data Exposure in
+Logs" (`log_message_guard.py`, v1.21.0)** — one more from the same
+WebGoat pass: `lessons/passwordstorage/js/password-storage.js` has
+`.catch((error) => console.error("Unable to load password storage
+training data", error))`, flagged purely because the literal string
+"Unable to load password storage training data" contains the word
+"password" — the actual logged argument is `error`, a generic JS
+`Error` object with no password data at all. The JS version of this
+rule had no syntactic marker to lean on the way its Python and PHP
+siblings do (each additionally requires either keyword-argument syntax
+or the language's own variable sigil immediately before the sensitive
+word, so a plain string message never matches either of those two —
+see "Best-effort heuristics" for the exact shapes, written carefully
+enough not to trip their own rules); JS identifiers and string contents
+look identical to a keyword-only regex, so this is the first language
+where the false positive was even possible. Fixed, not by narrowing the
+JS regex itself, but by a separate check: strip every quoted string
+literal off the flagged line (keeping a backtick template literal's
+`${...}` interpolated expressions in place, so a genuine leak written
+as `` console.log(`password is ${password}`) `` still matches after
+stripping) and re-run the exact same compiled regex against what's
+left — if nothing matches, every keyword occurrence on that line was
+message text, not a real reference, and the finding is dropped. This
+rule had zero regression fixtures in any language before this fix;
+`tests/fixtures/js/log_message_cases.js` now covers the false positive,
+a bare-variable true positive, and the template-literal-interpolation
+true positive in one file.
+
 **Misconfiguration scanning (`config_scanner.py`) stays regex-based for
 every file type**, deliberately — Dockerfiles, `nginx.conf`, `.env`, and
 similar config formats are simple key/value or directive-per-line formats
@@ -560,7 +588,11 @@ Ruby/Rails, Lua, Rust):
   layer still covers those same-line and bare-variable.
 - Sensitive Data Exposure in Logs (passwords/secrets/tokens/hashes passed to
   `logger.debug`/`console.log`/`error_log` — common with structured loggers
-  whose output ends up in a dashboard or log aggregator)
+  whose output ends up in a dashboard or log aggregator. The JS rule no
+  longer fires, added v1.21.0, when every keyword match on the line came
+  from inside a quoted string literal — a log message that happens to
+  mention "password" in its own prose, not an actual value being logged;
+  see `log_message_guard.py` and "Best-effort heuristics")
 - Multi-line-aware SQL Injection: an f-string/template-literal/C#
   interpolated string with real SQL structure (`SELECT...FROM`,
   `INSERT...INTO`, etc.) and an interpolated variable is flagged at its
@@ -1305,6 +1337,35 @@ than flagging when a check seems absent.
   `app.get("/proxy", ...)` route reading `req.query.url`) and against
   DVWA/Juice Shop/Mutillidae's own SSRF findings, none of which are JS.
 
+- **Log-message-string false positives in "Sensitive Data Exposure in
+  Logs"** (`log_message_guard.py`, added v1.21.0) — removes a JS
+  "Sensitive Data Exposure in Logs" finding whose keyword match came
+  entirely from inside a quoted string literal rather than a real
+  variable/property reference. Found testing flagmap against WebGoat's
+  `lessons/passwordstorage/js/password-storage.js`: a
+  `console.error("Unable to load password storage training data",
+  error)` call flagged purely because that human-readable message
+  string contains the word "password" — the actual argument logged is a
+  generic `Error` object. Unlike the Python and PHP versions of this
+  rule, which already require keyword-argument syntax or the language's
+  own variable sigil immediately before the sensitive word (and so
+  never had this false positive to begin with), the JS rule has no such
+  marker available — a bare keyword inside a string and a bare keyword
+  as a real reference look identical to it. Fixed with a separate
+  check, not a narrower regex: strip every quoted string literal off
+  the flagged line, keeping a backtick template literal's `${...}`
+  interpolated expressions in place of the literal text around them,
+  and re-run the SAME compiled rule against what's left. If nothing
+  matches, every occurrence was message text and the finding is
+  dropped; if the keyword survives — a real second argument sitting
+  outside any string, or a variable interpolated into a template
+  literal — the finding is left completely alone, since those are
+  exactly the real leaks this rule exists to catch. This rule had zero
+  regression fixtures in any language before this fix;
+  `tests/fixtures/js/log_message_cases.js` now covers all three shapes
+  (the message-only false positive, a bare-variable true positive, and
+  a template-literal-interpolation true positive) in one file.
+
 ## What it can't catch (on purpose)
 
 A few recurring bug shapes get found in testing over and over, confirmed as
@@ -1432,6 +1493,7 @@ flagmap/
     jquery_dom_guard.py      # suppresses idor.py's fallback IDOR finding when it's really a jQuery DOM-method collision (see "Best-effort heuristics", added v1.19.0)
     js_clientside_guard.py   # shared "is this JS file unambiguously client-side" predicate, used by jquery_dom_guard.py and ssrf_fetch_guard.py (added v1.20.0)
     ssrf_fetch_guard.py      # suppresses the taint-blind SSRF regex on a plain client-side fetch() call (see "Best-effort heuristics", added v1.20.0)
+    log_message_guard.py     # suppresses the JS sensitive-log regex when the keyword match is inside message text, not a real reference (see "Best-effort heuristics", added v1.21.0)
     chains.py              # attack-path correlation over a scan's findings
     config_patterns.py    # the misconfiguration pattern database
     config_scanner.py      # file walking + checks (Dockerfile/nginx/.env/etc.)
@@ -1651,6 +1713,15 @@ separate vendor-bypass fixture was added for this guard specifically —
 `is_clientside_js()`'s vendor path is shared code already exercised by
 `jquery-widget-fake.js` above, not a second implementation that could
 independently regress.
+
+`log_message_guard.py` is the first fixture this rule has ever had, in
+any language — `tests/fixtures/js/log_message_cases.js` covers all
+three shapes in one file: the message-only false positive (`safe`), a
+bare second-argument true positive (`ruleid`, proving a real reference
+sitting outside any string is never touched), and a template-literal-
+interpolation true positive (`ruleid`, proving the strip keeps a
+genuine `${...}`-interpolated leak intact rather than discarding it
+along with the surrounding template literal).
 
 **A third validation layer, beyond this repo's own fixtures**: hand-built
 fixtures only ever catch what whoever wrote them thought to write — they
@@ -1956,3 +2027,15 @@ on the normal `python3` interpreter's path, is the reliable way to run it.
   `response.` as signals after they turned out to collide with the
   Fetch API's own standard `fetch(url).then(function(response) {...})`
   promise-chain idiom, found and fixed before this shipped.
+- ~~Suppress the JS "Sensitive Data Exposure in Logs" rule when the
+  keyword match is inside a log message string, not a real value~~ —
+  added in v1.21.0 via `log_message_guard.py`, see "Architecture" and
+  "Best-effort heuristics". Same WebGoat pass: `console.error("Unable
+  to load password storage training data", error)` flagged purely
+  because the message text contains "password," with no actual
+  sensitive value anywhere in the call. Fixed by stripping quoted
+  string literals off the flagged line (keeping a backtick template
+  literal's interpolated expressions) and re-checking the same rule
+  against what's left, rather than narrowing the rule's own keyword
+  list. This category had zero regression fixtures in any language
+  before this fix.
