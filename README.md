@@ -440,6 +440,46 @@ rule had zero regression fixtures in any language before this fix;
 a bare-variable true positive, and the template-literal-interpolation
 true positive in one file.
 
+**Java/Maven test-file conventions missing from `is_test_file()`
+(`scanner.py`, v1.22.0)** — the fourth and last finding from the same
+WebGoat pass: `src/it/java/org/owasp/webgoat/RegistrationUITest.java`
+hardcodes a real-looking test credential as part of a Selenium UI test
+for the registration lesson, which trips the hardcoded-password rule —
+exactly the expected, intentional kind of noise `is_test_file()` exists
+to suppress for files recognized as test fixtures. It wasn't recognized
+because `is_test_file()` only knew Python/JS-style conventions
+(`test_foo.py`, `foo_test.py`, `foo.spec.js`) and generic path segments
+(`test`, `tests`, `__tests__`, `spec`, `specs`) — it had never seen
+Java/Maven's own conventions: Surefire's default unit-test include
+patterns (`Test*.java`, `*Test.java`, `*Tests.java`, `*TestCase.java`)
+and Failsafe's default integration-test include patterns (`*IT.java`,
+`*ITCase.java`, `*IntegrationTest.java`), plus Failsafe's conventional
+`src/it/java/...` integration-test source root (a sibling of
+`src/test/java/...`, which the existing `test`-segment check already
+caught). Both are real, stable, documented Maven plugin defaults, not a
+guess. Added as two checks: a `src/.../it/...` path-segment match (an
+`it` segment immediately preceded by a `src` segment — deliberately
+narrow, so it doesn't also match an i18n resource folder like
+`resources/it/` for Italian translations, which has no `src` segment
+right before it), and a filename check against the PascalCase
+prefix/suffixes above. The filename check is deliberately
+case-sensitive and checked against the original, non-lowercased
+basename — a case-insensitive bare substring check for "test"/"it"
+would wrongly match ordinary class names that merely end in those
+letters, like `Submit.java` or `Contest.java`; matching the capital
+letter that starts `Test`/`IT`/etc. is what actually respects Java's
+PascalCase word boundary. Confirmed this eliminates the real WebGoat
+false positive and introduces no regressions across the full suite or
+any of the four corpora tested so far (WebGoat, DVWA, Juice Shop,
+Mutillidae) — including deliberately leaving DVWA's own unrelated
+`vulnerabilities/sqli/test.php` alone: its bare "test" filename stem
+doesn't match any Java convention (it isn't one), and it turned out to
+be a genuine, intentional finding (a leftover DB-connectivity script
+with a real hardcoded credential against a specific host), not a false
+positive, so broadening `is_test_file()` to catch bare `test.<ext>`
+filenames was deliberately *not* done — it would have hidden a real bug
+instead of a test artifact.
+
 **Misconfiguration scanning (`config_scanner.py`) stays regex-based for
 every file type**, deliberately — Dockerfiles, `nginx.conf`, `.env`, and
 similar config formats are simple key/value or directive-per-line formats
@@ -989,10 +1029,18 @@ checking first. Treat it as a fast triage pass, not ground truth — always
 verify the actual code path.
 
 Matches inside files/directories that look like test fixtures (`tests/`,
-`test_*.py`, `*.spec.js`, etc.) are suppressed for the handful of rules that
+`test_*.py`, `*.spec.js`, Java/Maven's `*Test.java`/`*IT.java`/
+`src/it/java/...`, etc.) are suppressed for the handful of rules that
 are expected to fire constantly on legitimate test data (e.g. a hardcoded
 `password = "testpassword123"` in a unit test) — see `scanner.is_test_file()`
-and `patterns.NOISY_IN_TEST_FILES`.
+and `patterns.NOISY_IN_TEST_FILES`. The Java/Maven conventions (`Test*.java`,
+`*Test.java`/`*Tests.java`/`*TestCase.java` for Surefire unit tests,
+`*IT.java`/`*ITCase.java`/`*IntegrationTest.java` plus the `src/it/java/...`
+source root for Failsafe integration tests) were added in v1.22.0 after a
+real WebGoat `RegistrationUITest.java` false positive — see "Architecture"
+for the full writeup, including why a bare `test.<ext>` filename stem is
+deliberately still *not* covered (it caught a genuine DVWA bug, not a test
+artifact, when checked).
 
 Any single line over 5,000 characters is skipped before any regex touches it
 (`scanner.MAX_LINE_LEN`). Real, hand-written vulnerable source is never a
@@ -1366,6 +1414,35 @@ than flagging when a check seems absent.
   (the message-only false positive, a bare-variable true positive, and
   a template-literal-interpolation true positive) in one file.
 
+- **Java/Maven test-file conventions in `is_test_file()`** (`scanner.py`,
+  added v1.22.0) — recognizes two more test-fixture naming conventions
+  so the handful of noisy rules in `NOISY_IN_TEST_FILES` get suppressed
+  on them the same way they already were for `test_*.py`/`*.spec.js`/a
+  `tests/` directory segment: Maven Surefire's default unit-test include
+  patterns (`Test*.java`, `*Test.java`, `*Tests.java`, `*TestCase.java`)
+  and Failsafe's default integration-test include patterns (`*IT.java`,
+  `*ITCase.java`, `*IntegrationTest.java`), plus Failsafe's conventional
+  `src/it/java/...` integration-test source root. Found testing flagmap
+  against WebGoat's `src/it/java/org/owasp/webgoat/
+  RegistrationUITest.java`, a Selenium UI test hardcoding a registration
+  test credential. The filename check is deliberately case-sensitive
+  against the original basename — a case-insensitive bare substring
+  check for "test"/"it" would also match ordinary class names that
+  merely end in those letters, like `Submit.java` or `Contest.java`;
+  only matching the capital letter that actually starts
+  `Test`/`Tests`/`TestCase`/`IT`/`ITCase`/`IntegrationTest` respects
+  Java's PascalCase word boundary. The `src/.../it/...` path check
+  requires an `it` segment immediately preceded by a `src` segment, so
+  it doesn't also match an i18n resource folder like `resources/it/`
+  for Italian translations. Deliberately did NOT extend this to a bare
+  `test.<ext>` filename stem: DVWA's `vulnerabilities/sqli/test.php`
+  has exactly that name and also trips a noisy rule, but turned out on
+  inspection to be a genuine, intentional finding (a leftover
+  DB-connectivity script with a real hardcoded credential against a
+  specific host), not a test artifact — suppressing it would have
+  hidden a real bug. See "Testing" for why this fix has no fixture of
+  its own.
+
 ## What it can't catch (on purpose)
 
 A few recurring bug shapes get found in testing over and over, confirmed as
@@ -1581,6 +1658,31 @@ smoke-testing during development (`--export-md` against a populated
 scan, an empty-findings scan, and alongside `--json`) rather than a
 fourth `EXPECTED.txt`-style convention that would just be asserting the
 same findings all over again under a different name.
+
+The v1.22.0 Java/Maven extension to `is_test_file()` also has **no**
+standard fixture category — but for a structural reason none of the
+suppression-guard cases above hit: every fixture file already lives
+under `tests/fixtures/<language>/...`, and `tests` is itself one of the
+generic path segments `is_test_file()` already matches, so it returns
+`True` for every fixture regardless of filename. There's no way to
+build a "should NOT be suppressed" control case for this inside the
+standard fixture tree — any Java fixture, named however, is already
+caught by the pre-existing `tests/` segment check before the new
+filename logic even runs. Same precedent as `owner_param_guard.py` and
+`pickle_guard.py` above: verified directly instead, with a dozen
+adversarial cases run straight through `is_test_file()` covering the
+real WebGoat path (`src/it/java/org/owasp/webgoat/
+RegistrationUITest.java`, now `True`), the false-positive-avoidance
+edge cases (`Submit.java`, `Contest.java`, both still `False`), the
+i18n-folder distinction (`resources/it/messages.properties`, still
+`False` — no `src` segment immediately before `it`), and confirmation
+that every pre-existing Python/JS/Ruby convention keeps behaving
+exactly as before. Then confirmed end-to-end against the real file via
+`scan_path()`: the WebGoat `RegistrationUITest.java` finding disappears,
+the full regression suite still passes unchanged (no fixture could be
+added, so no fixture count changed either), and a cross-corpus check
+across WebGoat, DVWA, Juice Shop, and Mutillidae shows only the two
+intended WebGoat findings vanish — nothing else moves.
 
 `vendor_guard.py`'s filename-shaped signals (the jQuery-plugin naming
 convention, `.min.js`/`.min.css`, the curated known-vendor-basename list,
@@ -2039,3 +2141,17 @@ on the normal `python3` interpreter's path, is the reliable way to run it.
   against what's left, rather than narrowing the rule's own keyword
   list. This category had zero regression fixtures in any language
   before this fix.
+- ~~Recognize Java/Maven's own test-file naming conventions in
+  `is_test_file()`~~ — added in v1.22.0, see "Architecture", "Best-effort
+  heuristics", and "Testing". Last of the same WebGoat pass:
+  `src/it/java/org/owasp/webgoat/RegistrationUITest.java` hardcodes a
+  test credential that `is_test_file()` should have suppressed but
+  didn't, because it only knew Python/JS-style conventions and generic
+  path segments, never Java/Maven's own `*Test.java`/`*IT.java`/
+  `src/it/java/...` conventions. Added both, case-sensitive against the
+  PascalCase boundary specifically to avoid matching ordinary class
+  names like `Submit.java`/`Contest.java`. No standard fixture could be
+  added for this one — every fixture already lives under
+  `tests/fixtures/...`, which the pre-existing `tests/` segment check
+  already matches unconditionally — so it was verified directly against
+  the real file and a dozen adversarial cases instead; see "Testing".

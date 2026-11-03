@@ -57,11 +57,52 @@ def detect_language(filename: str) -> Optional[str]:
 
 def is_test_file(path: str) -> bool:
     """Best-effort check for test fixture files, where hardcoded-looking
-    'passwords' (testpassword123, etc.) are expected and not real findings."""
+    'passwords' (testpassword123, etc.) are expected and not real findings.
+
+    Confirmed missing two Java/Maven-specific conventions via real-world
+    testing against WebGoat's own `src/it/java/.../RegistrationUITest.java`
+    (a Playwright integration test registering throwaway users with a
+    hardcoded dummy password — exactly the shape NOISY_IN_TEST_FILES exists
+    to quiet, but this function's directory/filename checks, written with
+    Python/JS-style snake_case and "test"/"spec" directory names in mind,
+    recognized neither the path nor the filename):
+
+    - Maven/Gradle's own integration-test source-root convention,
+      `src/it/java/...` (the Failsafe plugin's root, a sibling of
+      `src/test/java/...` which the "test" directory-segment check above
+      already covers) — `it` only counts as a direct child of `src`, not
+      anywhere else in the path, since "it" alone is too short and common
+      a word to treat as a signal on its own.
+    - Java's PascalCase test-class naming convention (`FooTest.java`,
+      `FooTests.java`, `FooTestCase.java`, Maven Surefire's own default
+      unit-test include patterns; `FooIT.java`, `FooITCase.java`,
+      `FooIntegrationTest.java`, Failsafe's own default integration-test
+      include patterns; plus Surefire's `Test*.java` prefix convention).
+      Checked against the ORIGINAL, case-preserved filename rather than
+      the already-lowercased `norm`/`base` used above: the word boundary
+      here is the capital-letter transition itself (`...Test`, `...IT`),
+      so matching case-insensitively would treat an ordinary class name
+      like `Submit.java` or `Contest.java` (which merely happens to end in
+      the letters "it") as a test file — the ONLY reason this is safe is
+      that Java identifiers are PascalCase by convention and a bare
+      lowercase "it"/"test" substring match would not respect that.
+    """
     norm = path.replace("\\", "/").lower()
     parts = norm.split("/")
     if any(p in ("test", "tests", "__tests__", "spec", "specs") for p in parts):
         return True
+    if "it" in parts:
+        it_idx = parts.index("it")
+        if it_idx > 0 and parts[it_idx - 1] == "src":
+            return True
+
+    original_base = os.path.basename(path.replace("\\", "/"))
+    original_name, _ = os.path.splitext(original_base)
+    if original_name.startswith("Test") or original_name.endswith(
+        ("Test", "Tests", "TestCase", "IT", "ITCase", "IntegrationTest")
+    ):
+        return True
+
     base = os.path.basename(norm)
     name, _ = os.path.splitext(base)
     return (
