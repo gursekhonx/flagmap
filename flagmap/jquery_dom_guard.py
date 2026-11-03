@@ -57,26 +57,18 @@ finding only when BOTH:
      anywhere in the enclosing function — confirming this finding really
      did come from the bare-parameter fallback, not the explicit-
      extraction path.
-  2. No sign the FILE is server-side route-handling code at all — no
-     `req.`/`res.`/`request.`/`response.` reference, no
-     `require("express"/"koa"/"fastify"/"http"/"https")`, and no
-     `app.(get|post|put|delete|patch|use)(` / `router.(...)(` call —
-     ANYWHERE in the whole file, not just the one function. A real
+  2. No sign the FILE is server-side route-handling code at all — see
+     `js_clientside_guard.py`'s `is_clientside_js()`, which this module
+     reuses rather than keeping its own copy of the signal (as of
+     v1.20.0 — it originally defined this check inline). A real
      server-route file calling a genuine ORM `.find(`/`.remove(` would
-     show at least one of these somewhere; a pure front-end script never
-     will. Skipped entirely — straight to signal 1 — when
-     `vendor_guard.py`'s own `is_vendor_file()` already recognizes the
-     file as a vendored/third-party library: bundled library code can
-     coincidentally use `request`/`response` as ordinary local variable
-     names for reasons that have nothing to do with HTTP (confirmed
-     against jQuery UI's own Autocomplete widget, whose `source` option
-     callback is conventionally named `function(request, response)`,
-     which is what originally blocked this check from reaching the real
-     false positive a few hundred lines away in the same file). A
-     filename/content-convention signal that's already independently
-     tested is a better arbiter of "is this vendored" than a keyword
-     search would be here, so this reuses it rather than growing a
-     second, overlapping heuristic for the same question.
+     show at least one of `is_clientside_js()`'s recognized signals
+     somewhere; a pure front-end script never will. See that module's
+     own docstring for exactly what's checked, including the `vendor_
+     guard.py`-reuse bypass for vendored files (needed to reach jQuery
+     UI's own false positive in the first place: its real Autocomplete
+     widget names its `source` callback `function(request, response)`,
+     a plain variable-naming convention with nothing to do with HTTP).
 
 Both conditions narrow this to files that are unambiguously client-side
 JS with zero server-routing context anywhere — the same "when in doubt,
@@ -87,29 +79,22 @@ this only removes the finding when there is no server-side signal
 anywhere in the file to begin with.
 
 Known blind spot, same honesty standard as every guard before it: a
-server route file that happens to use none of these recognized signals
-(e.g. a raw Node `http.createServer` callback with a hand-rolled router
-using none of them) would also be wrongly suppressed if its only IDOR
-signal was this same fallback path. Accepted — the same tradeoff
-`vendor_guard.py`'s own filename-only signals already make, and one that
-hasn't been hit in any real corpus tested so far (DVWA, Mutillidae,
-NodeGoat, RailsGoat, Juice Shop, WebGoat).
+server route file that happens to use none of `is_clientside_js()`'s
+recognized signals (e.g. a raw Node `http.createServer` callback with a
+hand-rolled router using none of them, or one that spells its handler
+parameters `request`/`response` in full rather than the short `req`/
+`res` form) would also be wrongly suppressed if its only IDOR signal was
+this same fallback path. Accepted — the same tradeoff `vendor_guard.py`'s
+own filename-only signals already make, and one that hasn't been hit in
+any real corpus tested so far (DVWA, Mutillidae, NodeGoat, RailsGoat,
+Juice Shop, WebGoat).
 """
 
-import re
 from typing import List
 
 from . import ast_engine as _ast
 from .idor import ID_PARAM_RE
-from .vendor_guard import is_vendor_file
-
-_JS_SERVER_SIGNAL_RE = re.compile(
-    r"""\breq\.|\bres\.|\brequest\.|\bresponse\.|
-        require\(\s*['"](?:express|koa|fastify|http|https)['"]\s*\)|
-        \bapp\.(?:get|post|put|delete|patch|use)\s*\(|
-        \brouter\.(?:get|post|put|delete|patch|use)\s*\(""",
-    re.IGNORECASE | re.VERBOSE,
-)
+from .js_clientside_guard import is_clientside_js
 
 
 def filter_clientside_js_false_idor(path: str, language: str, source_bytes: bytes, lines: List[str],
@@ -128,17 +113,7 @@ def filter_clientside_js_false_idor(path: str, language: str, source_bytes: byte
         return findings
 
     full_text = "".join(lines)
-    # A file vendor_guard.py already recognizes as vendored (by filename
-    # convention, a known-vendor basename, a webfont sibling, or a
-    # license banner — never by content keyword) skips the server-signal
-    # scan below entirely: a bundled third-party library can coincidentally
-    # use `request`/`response` as plain local variable names for reasons
-    # that have nothing to do with HTTP (jQuery UI's own Autocomplete
-    # widget calls its source callback `function(request, response)`,
-    # which is what motivated this — see module docstring), and that's
-    # exactly the kind of false "server signal" is_vendor_file()'s own,
-    # independently-already-tested naming/content signals are immune to.
-    if not is_vendor_file(path, full_text) and _JS_SERVER_SIGNAL_RE.search(full_text):
+    if not is_clientside_js(path, full_text):
         return findings  # some sign of server-route code exists somewhere in the file — never suppress
 
     parser = _ast._PARSERS.get(language)

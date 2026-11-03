@@ -373,6 +373,45 @@ before) against DVWA, Juice Shop, and Mutillidae's own IDOR findings,
 including that Juice Shop's `payment.ts`/`address.ts`/`wallet.ts`
 upgrades from `owner_param_guard.py` above are untouched.
 
+**Client-side JS false positives in the taint-blind SSRF regex
+(`ssrf_fetch_guard.py`, v1.20.0), and a narrowed shared signal
+(`js_clientside_guard.py`, v1.20.0)** — continuing the same WebGoat pass,
+this time `lessons/webauthn/js/webauthn.js` and `lessons/
+securitymisconfiguration/js/security-misconfiguration-task2.js`: both
+call `fetch(url, ...)` with a plain variable, which trips `patterns.py`'s
+taint-blind JS SSRF regex (the "possible"-confidence entry that exists
+as a backstop for "an outbound request built from a variable that might
+trace back to a request parameter" — not the separate, "likely"-
+confidence entry that requires a literal `req.query`/`req.params`/
+`req.body` in the same match, which was never at risk here). Both files
+are pure browser scripts — there's no SSRF concept to find at all, since
+SSRF specifically means tricking a *server* into making a request from
+its own privileged position; a browser making its own fetch() call
+crosses no trust boundary. `ssrf_fetch_guard.py` suppresses that one
+regex entry's findings using the exact same "is this file unambiguously
+client-side" predicate `jquery_dom_guard.py` introduced in v1.19.0 —
+factored out into its own module, `js_clientside_guard.py`, specifically
+so this second guard could reuse it rather than re-deriving a slightly
+different copy. That extraction also narrowed the signal itself: the
+v1.19.0 version included the long forms `request.`/`response.`, which
+turned out to collide with a SECOND common JS convention beyond jQuery
+UI's Autocomplete widget — the Fetch API's own standard promise-chain
+idiom, `fetch(url).then(function(response) { return response.json(); })`,
+names its resolved value `response` in essentially every piece of
+client-side code that calls `fetch()` at all. Since this new guard needs
+to recognize a file as client-side specifically *because* it calls
+`fetch()`, keeping `response.` as a signal would have made the "no
+server signal" check next to useless for exactly the files it most
+needs to clear — found and fixed during this fix's own development,
+caught before it ever shipped. The short forms `req.`/`res.` are kept:
+real Express/Koa/Fastify handler code overwhelmingly uses them by
+convention, and neither has collided with anything in any real corpus
+tested so far. Confirmed true-negative against the project's own
+`tests/fixtures/js/vuln_sinks.js` SSRF case (a real `app.get("/proxy",
+...)` route reading `req.query.url`, wall-to-wall Express signals) and
+against DVWA/Juice Shop/Mutillidae's own SSRF findings — none of which
+are JS, so none were ever in scope for this guard to begin with.
+
 **Misconfiguration scanning (`config_scanner.py`) stays regex-based for
 every file type**, deliberately — Dockerfiles, `nginx.conf`, `.env`, and
 similar config formats are simple key/value or directive-per-line formats
@@ -411,7 +450,11 @@ Ruby/Rails, Lua, Rust):
 - Server-Side Template Injection / SSTI (`render_template_string`, EJS,
   Handlebars, Nunjucks)
 - SSRF (`requests`/`urlopen`/`pycurl` in Python, `axios`/`fetch`/`http.get` in
-  Node, `curl_setopt`/`file_get_contents` in PHP, fed from request data)
+  Node, `curl_setopt`/`file_get_contents` in PHP, fed from request data.
+  The coarse, taint-blind `fetch(var, ...)`-style JS backstop no longer
+  fires, added v1.20.0, inside a file with no server-route signal
+  anywhere — a plain browser `fetch()` call isn't SSRF at all; see
+  `ssrf_fetch_guard.py` and "Best-effort heuristics")
 - Unrestricted File Upload (`move_uploaded_file`, Flask `.save()`, `multer()`
   with no extension/type allowlist)
 - Cross-Site Scripting / XSS (reflected `echo`/`print` in PHP, unescaped
@@ -1230,6 +1273,38 @@ than flagging when a check seems absent.
   IDOR findings (including the `owner_param_guard.py` upgrades above,
   all unaffected).
 
+- **Client-side-fetch false positives in the SSRF backstop**
+  (`ssrf_fetch_guard.py`, added v1.20.0) — removes a "SSRF (Server-Side
+  Request Forgery)" finding that came from `patterns.py`'s taint-blind
+  JS regex (`fetch(var, ...)`/`axios.get(var)`/`http.get(var)`, the
+  "possible"-confidence entry — identified by a stable substring of its
+  own why-text, never the separate "likely"-confidence entry that
+  requires a literal `req.query`/`req.params`/`req.body` in the same
+  match) inside a file with no server-route signal anywhere. Found
+  testing flagmap against WebGoat's `lessons/webauthn/js/webauthn.js`
+  and `lessons/securitymisconfiguration/js/security-misconfiguration-
+  task2.js`: both call `fetch(url, ...)` from plain browser code, with
+  no server-side request-handling concept anywhere in either file — SSRF
+  specifically means tricking a *server* into using its own privileged
+  network position on an attacker's behalf, which a browser's own fetch
+  call can't do regardless of where the URL came from. Reuses the exact
+  same "is this file unambiguously client-side" predicate
+  `jquery_dom_guard.py` introduced in v1.19.0, factored out into its own
+  module (`js_clientside_guard.py`) specifically so this guard didn't
+  need a second, slightly-diverging copy of it. That extraction also
+  narrowed the predicate itself, added v1.20.0: the original included
+  `request.`/`response.` as signals, which collided with the Fetch
+  API's own standard promise-chain idiom
+  (`fetch(url).then(function(response) { return response.json(); })` —
+  `response.json()` is how essentially every piece of client-side code
+  that calls `fetch()` consumes the result), making the "no server
+  signal" check next to useless for exactly the files this guard most
+  needs to clear. Caught and fixed during this fix's own development,
+  before it shipped. Confirmed true-negative against the project's own
+  `tests/fixtures/js/vuln_sinks.js` SSRF case (a real Express
+  `app.get("/proxy", ...)` route reading `req.query.url`) and against
+  DVWA/Juice Shop/Mutillidae's own SSRF findings, none of which are JS.
+
 ## What it can't catch (on purpose)
 
 A few recurring bug shapes get found in testing over and over, confirmed as
@@ -1355,6 +1430,8 @@ flagmap/
     owner_param_guard.py     # upgrades an IDOR finding when the ownership filter itself is request-sourced (see "Best-effort heuristics", added v1.16.0)
     migration_guard.py       # suppresses loot.py's dump-file finding for recognized versioned-migration scripts (see "Best-effort heuristics", added v1.18.0)
     jquery_dom_guard.py      # suppresses idor.py's fallback IDOR finding when it's really a jQuery DOM-method collision (see "Best-effort heuristics", added v1.19.0)
+    js_clientside_guard.py   # shared "is this JS file unambiguously client-side" predicate, used by jquery_dom_guard.py and ssrf_fetch_guard.py (added v1.20.0)
+    ssrf_fetch_guard.py      # suppresses the taint-blind SSRF regex on a plain client-side fetch() call (see "Best-effort heuristics", added v1.20.0)
     chains.py              # attack-path correlation over a scan's findings
     config_patterns.py    # the misconfiguration pattern database
     config_scanner.py      # file walking + checks (Dockerfile/nginx/.env/etc.)
@@ -1560,6 +1637,20 @@ fix in the real jQuery UI file, right alongside the real false-positive
 shape, so a regression that drops the vendor bypass shows up as a
 missing `safe` assertion rather than silently stopping being tested at
 all.
+
+`ssrf_fetch_guard.py` gets its own standalone fixture for the same
+reason `jquery_dom_guard.py`'s did: `tests/fixtures/js/vuln_sinks.js`'s
+real SSRF case is wall-to-wall Express signals by design, so adding a
+case there would never exercise the suppression.
+`tests/fixtures/js/clientside_fetch_cases.js` holds a plain
+`fetch(url, ...)` call inside a function with zero server-route signals
+anywhere, with a `safe: SSRF (Server-Side Request Forgery)` marker on
+the `fetch()` call's own line (the regex-based rule anchors there
+directly, unlike the AST-scope-anchored IDOR fallback case above). No
+separate vendor-bypass fixture was added for this guard specifically —
+`is_clientside_js()`'s vendor path is shared code already exercised by
+`jquery-widget-fake.js` above, not a second implementation that could
+independently regress.
 
 **A third validation layer, beyond this repo's own fixtures**: hand-built
 fixtures only ever catch what whoever wrote them thought to write — they
@@ -1852,3 +1943,16 @@ on the normal `python3` interpreter's path, is the reliable way to run it.
   check once jQuery UI's real Autocomplete widget (`function(request,
   response)`, an ordinary naming convention with nothing to do with
   HTTP) turned out to defeat a naive version of it.
+- ~~Suppress the taint-blind JS SSRF regex on a plain client-side
+  fetch() call~~ — added in v1.20.0 via `ssrf_fetch_guard.py`, see
+  "Architecture" and "Best-effort heuristics". Same WebGoat pass, two
+  more JS files: `webauthn.js` and `security-misconfiguration-task2.js`
+  both call `fetch(url, ...)` from plain browser code with no server
+  concept anywhere — SSRF means tricking a *server*, and a browser
+  making its own fetch call crosses no trust boundary at all. Reuses
+  `jquery_dom_guard.py`'s "is this file unambiguously client-side"
+  predicate, factored out into `js_clientside_guard.py` for both guards
+  to share — and narrowed in the process, dropping `request.`/
+  `response.` as signals after they turned out to collide with the
+  Fetch API's own standard `fetch(url).then(function(response) {...})`
+  promise-chain idiom, found and fixed before this shipped.

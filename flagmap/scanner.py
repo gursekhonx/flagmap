@@ -15,6 +15,7 @@ from .pickle_guard import annotate_guarded_pickle_loads
 from .sql_construct import find_sql_construction, SQL_CONSTRUCT_LANGUAGES
 from .owner_param_guard import annotate_bypassable_ownership
 from .jquery_dom_guard import filter_clientside_js_false_idor
+from .ssrf_fetch_guard import filter_clientside_js_false_ssrf
 from .config_scanner import scan_config_path
 from .heredoc import iter_heredoc_sources
 from .loot import find_loot
@@ -285,6 +286,15 @@ def scan_lines(path: str, language: str, lines: List[str], patterns: list) -> Li
     # signal anywhere. See jquery_dom_guard.py's module docstring for
     # exactly what this does and doesn't try to prove.
     findings = filter_clientside_js_false_idor(path, language, source_bytes, lines, findings)
+
+    # Removes any "SSRF (Server-Side Request Forgery)" finding that came
+    # from patterns.py's taint-blind `fetch(var, ...)`-style regex (the
+    # "possible"-confidence entry, not the stricter req.query-anchored
+    # "likely" one) in a file with no server-route signal anywhere — a
+    # plain browser fetch() call is not SSRF at all. See
+    # ssrf_fetch_guard.py's module docstring for exactly what this does
+    # and doesn't try to prove.
+    findings = filter_clientside_js_false_ssrf(path, language, lines, findings)
 
     # best-effort Missing Authentication Check: a function that reads a
     # username/identity claim straight from the request and grants a new
