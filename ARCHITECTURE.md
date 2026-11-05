@@ -2369,6 +2369,46 @@ real too). LA CTF 175 → 181 (five job-board lines, one old-site); all
 other corpora unchanged. Fixtures in the shared `vuln_sinks.js`/
 `clean_sinks.js`.
 
+**Unenforced AEAD tags in Node (`aead_decipher_guard.py`, v1.46.0)**:
+two real LA CTF challenges show both ways Node's `crypto` API lets GCM run
+unauthenticated. 2023 "zero-trust" keeps the user's paste-file path in an
+`iv.tag.ciphertext` cookie and reads it back like this:
+
+```js
+const cipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
+cipher.setAuthTag(authTag);
+res.locals.user = JSON.parse(cipher.update(ct).toString("utf8"));
+```
+
+`setAuthTag()` only records the tag; the comparison happens in `.final()`,
+which is never called. GCM is CTR mode underneath, so XOR-ing
+`known ⊕ wanted` into the ciphertext turns `{"tmpfile":"/tmp/pastestore/
+..."}` into `{"tmpfile":"/flag.txt","x":"..."}`. The 2026 sequel,
+"single-trust", appends `cipher.final()` but still creates the decipher
+with no `authTagLength` option, and Node accepts whatever tag length the
+client sends — so the same bit-flip plus a 1-byte tag, brute-forced in 256
+requests.
+
+For each `createDecipheriv(...)` naming an AEAD cipher: (A) if `.final(` is
+never called on the variable it was assigned to — searched only between
+this call and the next `createCipheriv`/`createDecipheriv` — the tag is
+never checked: "high"/"likely". The window matters: in zero-trust the
+*encrypting* object a few lines up is also called `cipher` and does call
+`.final()`; a whole-file search for `cipher.final(` diagnosed the first
+draft wrongly as case (B). (B) Otherwise, for GCM (CCM and OCB already
+require the option), no `authTagLength` on that line means truncated tags
+are accepted: "medium"/"likely". Both are filed under "Weak Cryptography"
+and land on the `createDecipheriv` line.
+
+Verified with the per-finding corpus diff: LA CTF 181 → 183, exactly
+zero-trust:45 (A) and single-trust:45 (B); CyberSci and DUCTF 2023–2025
+unchanged. Fixtures `tests/fixtures/js/aead_decipher_vuln.js` (both real
+shapes, including the shared-name encrypt/decrypt pair) and `_clean.js`
+(GCM with `authTagLength` and `.final()`; CBC). Known blind spots: a
+decipher handed to a helper that calls `.final()` elsewhere is
+over-reported as (A); an options object built on another line is
+over-reported as (B).
+
 `report_md.py` deliberately has no fixture category of its own: it's a
 pure renderer over `Finding`/`Chain` objects the regression suite above
 already exercises and validates, with no detection logic of its own to

@@ -137,7 +137,11 @@ Ruby/Rails, Lua, Rust):
   256/384/512) against the same verification key, the classic JWT
   "algorithm confusion" attack — an RSA/EC public key isn't secret, so it
   can be replayed as the HMAC secret for a forged HS256 token)
-- Weak Cryptography (MD5/SHA1 for password hashing, AES/DES in ECB mode)
+- Weak Cryptography (MD5/SHA1 for password hashing, AES/DES in ECB mode;
+  and — added v1.46.0, see `aead_decipher_guard.py`/ARCHITECTURE.md — a
+  Node AES-GCM/CCM/OCB/ChaCha20-Poly1305 decipher whose tag is never
+  verified (no `.final()`), or a GCM decipher without `authTagLength`,
+  which accepts a 1-byte tag)
 - Insecure Randomness (`random`/`Math.random()`/`rand()` used for
   tokens/passwords/OTPs instead of a CSPRNG)
 - CORS Misconfiguration (reflected/wildcard origin, especially with

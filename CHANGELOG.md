@@ -963,3 +963,23 @@ entry below.
   `/&/g` and `replaceAll` as safe); per-finding corpus diff: LA CTF 175 →
   181 (five job-board lines, one old-site line); every other corpus
   unchanged; `patterns.py` self-scan unchanged at 8.
+- ~~Node AEAD decryption whose authentication tag is never enforced~~ —
+  added in v1.46.0, see ARCHITECTURE.md and CAPABILITIES.md. Two real LA
+  CTF challenges, the same app before and after a partial fix. 2023
+  "zero-trust" decrypts its `iv.tag.ciphertext` session cookie with
+  `createDecipheriv("aes-256-gcm", ...)`, `setAuthTag(...)` and
+  `update(ct)` — never `.final()`, which is where Node compares the tag —
+  so the cookie is bit-flippable CTR and the solve rewrites
+  `{"tmpfile":"/tmp/..."}` to `/flag.txt`. 2026 "single-trust" adds
+  `.final()` but no `authTagLength`, so Node accepts a 1-byte tag: same
+  bit-flip, then 256 guesses. Added `aead_decipher_guard.py`: for each
+  AEAD `createDecipheriv` (GCM/CCM/OCB/ChaCha20-Poly1305), "high" if
+  `.final()` is never called on that decipher's variable before the next
+  cipher is created, else (GCM) "medium" if the call has no
+  `authTagLength`. Scoping the `.final()` search mattered: zero-trust's
+  *encrypting* object is also named `cipher` and does call `.final()`.
+  Verified: 249/249 regression (dedicated vuln/clean fixtures, including
+  that same-name encrypt-then-decrypt shape, a fully correct decipher,
+  and CBC); per-finding corpus diff: LA CTF 181 → 183, exactly the two
+  real lines; all other corpora unchanged; guard and `scanner.py`
+  self-scan clean.

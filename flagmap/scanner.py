@@ -32,6 +32,7 @@ from .class_pollution_guard import find_class_pollution, CLASS_POLLUTION_LANGUAG
 from .forin_prefix_pollution_guard import find_forin_prefix_pollution, FORIN_PREFIX_LANGUAGES
 from .xff_trust_guard import find_xff_trust, XFF_LANGUAGES
 from .token_mass_assign_guard import find_token_mass_assign, TOKEN_MASS_ASSIGN_LANGUAGES
+from .aead_decipher_guard import find_aead_decipher_issues, AEAD_LANGUAGES
 
 # No hand-written vulnerable application code is ever a single line this long —
 # only minified/bundled vendor files (tailwindcss.js, jquery.min.js, etc.) are,
@@ -615,6 +616,42 @@ def scan_lines(path: str, language: str, lines: List[str], patterns: list) -> Li
                     "offered, like a role/admin/is_teacher flag the app later trusts for authorization.",
                 payload="Add the privilege claim the app checks to the same request, e.g. is_admin=1 / "
                         "role=admin / is_teacher=1, then use the returned token.",
+                confidence="likely",
+            ))
+
+    # Node AEAD decryption (GCM/CCM/OCB/ChaCha20-Poly1305) whose auth tag
+    # is never enforced: no .final() in the file at all, or a GCM decipher
+    # created without authTagLength (accepts truncated tags). See
+    # aead_decipher_guard.py's module docstring.
+    if language in AEAD_LANGUAGES:
+        for af in find_aead_decipher_issues(path, language, lines):
+            key = (af.line_no, "Weak Cryptography")
+            if key in seen:
+                continue
+            seen.add(key)
+            if af.kind == "no_final":
+                severity = "high"
+                why = ("This AEAD decipher's authentication tag is never checked: setAuthTag() only stores "
+                       "the tag, and Node compares it inside .final(), which this file never calls. The "
+                       "ciphertext is effectively unauthenticated CTR-mode, so with any known plaintext an "
+                       "attacker can XOR in chosen bytes.")
+                payload = ("XOR (known_plaintext XOR desired_plaintext) into the ciphertext bytes, keep the IV "
+                           "and tag as-is, and send it back.")
+            else:
+                severity = "medium"
+                why = ("This GCM decipher is created without an authTagLength option, so Node accepts an "
+                       "authentication tag of any length the client supplies — down to a single byte. A "
+                       "forged ciphertext then only needs a 1-in-256 guess.")
+                payload = ("Bit-flip the ciphertext as for unauthenticated CTR, send a 1-byte tag, and try all "
+                           "256 values.")
+            findings.append(Finding(
+                file=af.file,
+                line_no=af.line_no,
+                line_text=af.line_text,
+                vuln_name="Weak Cryptography",
+                severity=severity,
+                why=why,
+                payload=payload,
                 confidence="likely",
             ))
 
