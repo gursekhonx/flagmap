@@ -799,3 +799,21 @@ entry below.
   correctly doesn't fire); DUCTF 2023 100 → 102 and DUCTF 2025 146 → 147,
   exactly the three real hits; DUCTF 2024 unchanged; both
   `xff_trust_guard.py` and `scanner.py` self-scan clean.
+- ~~PHP upload destination path built from the client's
+  `$_FILES[...]['name']`, written without `move_uploaded_file()`~~ —
+  added in v1.37.0, see ARCHITECTURE.md. From DownUnderCTF 2023's public
+  "xxd-server" beginner challenge: `$upload_path = $upload_dir . '/' .
+  basename($_FILES['file-upload']['name']);` followed by
+  `file_put_contents($upload_path, ...)`. `basename()` stops traversal
+  but keeps the client's extension, and the app's `.htaccess` still
+  executes `.php`, so uploading `shell.php` is RCE (the ASCII column of
+  the hex dump still carries a short `<?= ... ?>`). The existing PHP
+  upload rule only keys on `move_uploaded_file(`. Added a single-line
+  rule keyed on the destination path itself — a `"dir/"` literal
+  concatenated with `$_FILES[...]['name']`, optionally via `basename()` —
+  rather than on `file_put_contents`, which writes every kind of file.
+  Verified: 211/211 regression (ruleid on the real shape; safe on
+  reading the name's extension for an allowlist and on echoing the name);
+  per-finding corpus diff shows only DUCTF 2023 102 → 103 — the real
+  line — with CyberSci (392), DUCTF 2024 (95) and DUCTF 2025 (147)
+  unchanged; `patterns.py` self-scan unchanged at 8.

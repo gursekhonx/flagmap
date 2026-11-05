@@ -120,3 +120,13 @@ function sqlConstructInlineInterp() {
     $query = "SELECT * FROM accounts WHERE username='$username'";  // ruleid: SQL Injection
     return $conn->runQuery($query);
 }
+
+function xxdStyleUpload() {
+    // Mirrors DownUnderCTF 2023's real "xxd-server": the client's own
+    // filename (and so its extension) becomes part of the destination
+    // path, and the file is written with file_put_contents(), not
+    // move_uploaded_file().
+    $upload_dir = 'uploads/' . bin2hex(random_bytes(8));
+    $upload_path = $upload_dir . '/' . basename($_FILES['file-upload']['name']);  // ruleid: Unrestricted File Upload
+    file_put_contents($upload_path, file_get_contents($_FILES['file-upload']['tmp_name']));
+}

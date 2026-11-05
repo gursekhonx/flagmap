@@ -92,3 +92,13 @@ function sqlConstructNoVariableSafe() {
         "WHERE username='admin'";  // safe: SQL Injection
     return $conn->runQuery($query);
 }
+
+function uploadWithServerChosenName() {
+    // The client's filename is only inspected (for its extension, checked
+    // against an allowlist) — the destination name is server-generated,
+    // so no path is ever built from $_FILES[...]['name'].
+    $ext = strtolower(pathinfo($_FILES['f']['name'], PATHINFO_EXTENSION));  // safe: Unrestricted File Upload
+    if (!in_array($ext, ['png', 'jpg'], true)) { return; }
+    $dest = 'uploads/' . bin2hex(random_bytes(8)) . '.' . $ext;
+    echo "Received " . $_FILES['f']['name'];  // safe: Unrestricted File Upload
+}

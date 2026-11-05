@@ -335,6 +335,35 @@ RAW_PATTERNS = [
         "possible",
     ),
     (
+        # Found in DownUnderCTF 2023's public "xxd-server" beginner web
+        # challenge (index.php):
+        #     $upload_dir = 'uploads/' . bin2hex(random_bytes(8));
+        #     $upload_path = $upload_dir . '/' . basename(<the client's upload name>);
+        #     ...
+        #     file_put_contents($upload_path, $upload_contents)
+        # The file is written with file_put_contents(), not
+        # move_uploaded_file(), so the rule above never fired. basename()
+        # stops traversal but keeps the client's EXTENSION, and the
+        # challenge's .htaccess executes anything ending in .php — upload
+        # shell.php and request it (the content is hex-dumped, but PHP
+        # still runs the <?= ... ?> it finds in the ASCII column). The
+        # signal here is the destination path itself: a string literal
+        # ending in "/" concatenated with the client-supplied upload name,
+        # which is what every "keep the user's filename" upload handler
+        # looks like regardless of which write call follows.
+        "Unrestricted File Upload",
+        "php",
+        r"""['"][^'"]*/['"]\s*\.\s*(?:basename\s*\(\s*)?\$_FILES\s*\[[^\]]+\]\s*\[\s*['"]name['"]\s*\]""",
+        "high",
+        "A destination path is built from the client-supplied upload filename ($_FILES[...]['name']). basename() "
+        "(if present) only blocks directory traversal — the client still chooses the extension. If nothing "
+        "else enforces an extension allowlist and the upload directory is web-served, a .php/.phtml upload "
+        "is code execution.",
+        "Upload shell.php (or .phtml/.phar if .php is filtered) containing <?php system($_GET['c']); ?>, "
+        "then request it from the upload directory.",
+        "possible",
+    ),
+    (
         "Unrestricted File Upload",
         "python",
         r"""\.save\s*\(\s*(?:os\.path\.join\s*\(.*?(?:secure_filename|filename)|request\.)""",

@@ -48,7 +48,10 @@ Ruby/Rails, Lua, Rust):
   anywhere — a plain browser `fetch()` call isn't SSRF at all; see
   `ssrf_fetch_guard.py` and ARCHITECTURE.md's "Best-effort heuristics" section)
 - Unrestricted File Upload (`move_uploaded_file`, Flask `.save()`, `multer()`
-  with no extension/type allowlist)
+  with no extension/type allowlist; and — added v1.37.0, see
+  ARCHITECTURE.md — a PHP destination path built by concatenating a
+  `"dir/"` literal with the client's `$_FILES[...]['name']`, with or
+  without `basename()`, whatever write call follows it)
 - Cross-Site Scripting / XSS (reflected `echo`/`print` in PHP, unescaped
   template returns in Flask, `.innerHTML =`/`res.send()` in JS, and — added
   v1.23.0, see ARCHITECTURE.md — React's `dangerouslySetInnerHTML={{__html:

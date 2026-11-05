@@ -2014,6 +2014,45 @@ allowlist check on the real peer address).
 Known blind spots: no cross-file tracking; IPv6 literals and CIDR checks
 (`ip_address(x) in ip_network(...)`) aren't recognized as decisions.
 
+**PHP upload path built from the client filename (`patterns.py`,
+v1.37.0)**: from DownUnderCTF 2023's public "xxd-server" beginner
+challenge (`index.php`):
+
+```php
+$upload_dir = 'uploads/' . bin2hex(random_bytes(8));
+$upload_path = $upload_dir . '/' . basename($_FILES['file-upload']['name']);
+mkdir($upload_dir);
+$upload_contents = xxd(file_get_contents($_FILES['file-upload']['tmp_name']));
+file_put_contents($upload_path, $upload_contents)
+```
+
+`basename()` blocks traversal but keeps the client's extension, and the
+challenge's `.htaccess` serves every non-`.php` file as `text/plain` —
+i.e. `.php` files still execute. Uploading `shell.php` gives code
+execution even though the content is hex-dumped first: the ASCII column
+still contains a short `<?=readfile(/****/'/flag')?>` (the comment trick
+spreads it across the 16-byte rows). flagmap's existing PHP upload rule
+keys on `move_uploaded_file(`, which this handler never calls.
+
+Rather than add `file_put_contents` as a second write-call trigger (it's
+also the most ordinary way to write any file, uploads or not), the new
+single-line rule keys on the destination path itself: a string literal
+ending in `/` concatenated with `$_FILES[...]['name']`, optionally
+through `basename()`. That's what every "keep the user's filename"
+handler looks like whichever write call comes next, and it doesn't fire
+on the two benign uses of the name seen in practice — reading its
+extension for an allowlist check (`pathinfo($_FILES[..]['name'], ...)`)
+or echoing it back — both of which are `safe` cases in the fixtures.
+The surrounding corpora have several `move_uploaded_file()` handlers
+(CyberSci "corpo", "cyspace") whose paths come from intermediate
+variables; none of them builds a path inline this way, so the diff
+confirmed no overlap or double-count with the existing rule.
+
+Verified: 211/211 regression (fixtures in the shared PHP
+`vuln_sinks.php`/`clean_sinks.php`); per-finding corpus diff shows only
+DUCTF 2023 102 → 103 (`xxd-server/src/index.php:24`), every
+other corpus unchanged; `patterns.py` self-scan unchanged at 8.
+
 `report_md.py` deliberately has no fixture category of its own: it's a
 pure renderer over `Finding`/`Chain` objects the regression suite above
 already exercises and validates, with no detection logic of its own to
