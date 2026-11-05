@@ -429,6 +429,48 @@ declared build parameter inside a `sh` step), and correct hits on both
 real vulnerable files, at exactly the lines containing the real
 `${PROJECT_NAME}`-interpolating `sh` steps.
 
+**GraphQL injection via plain "+" concatenation, not just "%" formatting
+(v1.25.0)**: continuing the same CyberSci audit into nationals-2025-26's
+"quote_vault" web challenge's `api/app.py`. The challenge's own solve
+script chains two bugs for its master flag: a URL-path-based GraphQL
+injection (`GET /api/quotes/<path:id_raw>` wraps `id_raw` straight into a
+query template, letting a player close the implicit `quote(id: <PATH>)`
+selection and chain a new top-level field) that reaches a second,
+genuinely vulnerable resolver doing boolean-blind SQLi. flagmap's
+AST/taint engine already caught the SQLi half on its own merits (an
+f-string SQL query, line 158) — but the GraphQL half, the actual
+attacker-facing entry point, was invisible:
+
+```python
+_PATH_TEMPLATE_PREFIX = "{ quote(id: "
+_PATH_TEMPLATE_SUFFIX = ") { id value author { name } } }"
+...
+query_text = _PATH_TEMPLATE_PREFIX + id_raw + _PATH_TEMPLATE_SUFFIX
+```
+
+Both existing Python GraphQL rules require either a triple-quoted string
+followed by `%` formatting, or a quoted string formatted with `%(...)`
+near the word "query"/"mutation" — neither condition holds here at all:
+there's no `%` anywhere on this line, just plain `+` concatenation. And
+unlike every other construction-site rule in this file, the GraphQL-
+shaped literal text that would normally anchor a "does this look like a
+query document" check isn't even on this line — it lives in
+`_PATH_TEMPLATE_PREFIX`/`_PATH_TEMPLATE_SUFFIX`, two plain string
+constants assigned several lines earlier, invisible to a same-line regex
+and not worth chasing with cross-line literal-value tracking for one
+example. Instead, anchored on the one signal that IS on this line: the
+assigned-to variable's own name contains "query" (also matches "graphql"/
+"gql", case-insensitive) AND it's built by concatenating at least two
+bareword/attribute-access operands with `+`. Same variable-naming-
+convention trade several other rules in this file already accept (the
+Python SQL Injection rule's own implicit `$sql`/`$query`-style
+conventions, idor.py's bare-parameter-name fallback) — not provable taint,
+just "this is what a GraphQL query construction site looks like when you
+can't see its literal content." Verified against the full 4-snapshot
+corpus: fires only on the one real line, leaves the five pre-existing
+`%`-formatting hits in underground-bank's `main.py` untouched, and no new
+false positives anywhere else.
+
 **Missing Authentication Check (`authn_guard.py`, v1.15.0) and guarded-
 deserialization advice (`pickle_guard.py`, v1.15.0)** both came out of
 testing flagmap against a real attached CTF challenge rather than a

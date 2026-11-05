@@ -1115,6 +1115,33 @@ RAW_PATTERNS = [
         'Try breaking out of the interpolated value with a quote + GraphQL comment, e.g. x") { __typename } #',
         "possible",
     ),
+    (
+        # Found in the real CyberSci nationals-2025-26 "quote_vault" web
+        # challenge (api/app.py): `query_text = _PATH_TEMPLATE_PREFIX +
+        # id_raw + _PATH_TEMPLATE_SUFFIX`, where id_raw is a Flask
+        # <path:...> route parameter and the two TEMPLATE constants (a
+        # GraphQL "{ quote(id: " / ") { id value author ... } }" wrapper)
+        # are plain string literals defined on separate earlier lines —
+        # neither of the two rules above fires: there's no `%` formatting
+        # here at all, and it's Python, not JS/template-literal syntax.
+        # Anchored on the assigned-to variable's own name (query/graphql/
+        # gql, case-insensitive) rather than the literal content, since
+        # the GraphQL-shaped text itself lives in separate constants this
+        # single line can't see — same "variable-naming-convention
+        # signal" trade several other rules in this file already accept
+        # (e.g. the Python SQL Injection rule's own $sql/$query-style
+        # fallbacks).
+        "GraphQL / Query Injection",
+        "python",
+        r'''\b\w*(?:query|graphql|gql)\w*\s*=\s*[\w.\[\]]+\s*\+\s*[\w.\[\]]+''',
+        "medium",
+        "A variable named like a GraphQL query/document is built via plain \"+\" string concatenation "
+        "instead of GraphQL variables — if any concatenated piece is user input (a route parameter, a "
+        "form field, ...), this is GraphQL injection: closing the implicit query/mutation with your own "
+        "quote and chaining a new top-level field or argument.",
+        'Try breaking out with a closing quote/paren plus a new field, e.g. 1) { id } evil(filter: "x" ) {',
+        "possible",
+    ),
 
     # ---------------- SENSITIVE DATA EXPOSURE IN LOGS ----------------
     (

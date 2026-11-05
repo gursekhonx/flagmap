@@ -113,7 +113,12 @@ Ruby/Rails, Lua, Rust):
   plenty of ordinary, correctly-checked code too; see ARCHITECTURE.md's "Best-effort heuristics" section for the stubborne-style case this was built for and its
   known false positives/negatives)
 - GraphQL / Query Injection (a query/mutation document built with `%`
-  formatting or template-literal interpolation instead of GraphQL variables)
+  formatting or template-literal interpolation instead of GraphQL
+  variables, and — Python only, added v1.25.0, see ARCHITECTURE.md — a
+  variable named like a GraphQL query/document built via plain `+` string
+  concatenation instead, anchored on the variable's own name since the
+  GraphQL-shaped literal text itself can live in separate constants a
+  single line can't see)
 - LDAP Injection (AST-matched since v1.4.0, Python/PHP/Java): a search
   filter string built from request data and passed to python-ldap's
   `search_s`/`search_st`/`search_ext`/`search_ext_s`, PHP's `ldap_search`/

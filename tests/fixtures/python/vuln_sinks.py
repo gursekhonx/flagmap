@@ -136,3 +136,18 @@ def pdf_inline():
     # same-line backstop case, covered by the regex layer even without
     # tree-sitter-python installed.
     return str(Paragraph(request.form.get("title", ""), None))  # ruleid: ReportLab Paragraph Injection (CVE-2023-33733)
+
+
+@app.route("/api/quotes/<path:id_raw>")
+def graphql_path_concat(id_raw):
+    # GraphQL / Query Injection via plain "+" concatenation (v1.24.0),
+    # found in the real CyberSci nationals-2025-26 "quote_vault" web
+    # challenge's api/app.py: the two template constants are plain string
+    # literals defined elsewhere, so there's no "%" formatting and no
+    # template-literal syntax on this line at all for the two older
+    # GraphQL rules to match — only the assigned-to variable's own name
+    # (containing "query") gives this away.
+    _PATH_TEMPLATE_PREFIX = "{ quote(id: "
+    _PATH_TEMPLATE_SUFFIX = ") { id value author { name } } }"
+    query_text = _PATH_TEMPLATE_PREFIX + id_raw + _PATH_TEMPLATE_SUFFIX  # ruleid: GraphQL / Query Injection
+    return query_text

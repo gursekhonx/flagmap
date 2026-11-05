@@ -83,3 +83,20 @@ def pdf_safe():
     # Paragraph Injection check matches on, just with nothing attacker-
     # controlled reaching it.
     return str(Paragraph("Static Report Title", None))  # safe: ReportLab Paragraph Injection (CVE-2023-33733)
+
+
+@app.route("/graphql_safe")
+def graphql_safe():
+    # A GraphQL client call, but the query is a single fixed literal with
+    # no "+"/"%" construction at all — nothing for the GraphQL / Query
+    # Injection check's own construction-site shape to match.
+    query = "{ quote(id: 1) { id value } }"
+    return query  # safe: GraphQL / Query Injection
+
+
+def plain_concat_unrelated_name():
+    # Plain "+" concatenation, but the assigned-to variable's name has
+    # nothing GraphQL-shaped about it at all — must NOT fire just because
+    # concatenation is happening somewhere in a Python file.
+    greeting = "Hello, " + request.args.get("name", "")
+    return greeting  # safe: GraphQL / Query Injection

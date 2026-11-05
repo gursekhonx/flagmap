@@ -321,3 +321,27 @@ entry below.
   `.groovy` file in the full 4-snapshot corpus (`exfilAwsKeys.groovy`,
   `pluginExport.groovy` ×2, `approveScripts.groovy`), and confirmed true
   on both real vulnerable files.
+- ~~GraphQL query built via plain Python "+" concatenation, not just "%"
+  formatting~~ — added in v1.25.0, see ARCHITECTURE.md and
+  CAPABILITIES.md. Found in the real CyberSci nationals-2025-26
+  "quote_vault" web challenge's api/app.py: `query_text =
+  _PATH_TEMPLATE_PREFIX + id_raw + _PATH_TEMPLATE_SUFFIX`, where
+  `id_raw` is a Flask `<path:...>` route parameter (the actual
+  attacker-facing injection point for the challenge's master-flag
+  boolean-blind SQLi, chained through this GraphQL injection) and the
+  two TEMPLATE constants are plain string literals defined on separate
+  earlier lines. Neither existing Python GraphQL rule fired: there's no
+  `%` formatting on this line at all, and the GraphQL-shaped literal
+  text (`"{ quote(id: "` / `") { id value author ... } }"`) lives in
+  those separate constants, invisible to a same-line regex. Added a
+  third rule anchored on the assigned-to variable's own name (containing
+  "query"/"graphql"/"gql", case-insensitive) built via `+`
+  concatenation of at least two bareword/attribute operands — the same
+  variable-naming-convention trade several other rules in this file
+  already make (e.g. the Python SQL Injection rule's own `$sql`/`$query`
+  fallbacks), needed here specifically because the literal content this
+  construction site actually produces isn't visible on the line that
+  builds it. Verified zero false positives across the full 4-snapshot
+  corpus (only the real line fires; the five pre-existing `%`-formatting
+  hits in underground-bank's main.py are unaffected) and confirmed true
+  on the real file.
