@@ -277,6 +277,78 @@ parses cleanly — just confirmation, from a real and fairly large
 TypeScript codebase, that the existing `.ts` → `"js"` mapping was never
 the gap it might have looked like on paper.
 
+**The v1.16.0 confirmation above turned out to be incomplete, and `.tsx`
+got its own dedicated grammar as a result (v1.23.0)**: Juice Shop's real
+`.ts` route handlers apparently never happen to mix a top-level
+TypeScript-only declaration (an `interface`, specifically) with a real
+sink in the *same* file, so v1.16.0's "fault-tolerant, parses fine in
+practice" conclusion held there — but it isn't actually what
+`tree-sitter-javascript` does with that shape. Found auditing flagmap
+against CyberSci's own official past-challenges repo
+(`CyberSci/PastChallenges`): nationals-2024-25's defence challenges ship
+real React+Remix frontends (`voter_registry`, `candidate_registry`) whose
+route/component files are `.tsx`, an extension `EXTENSION_LANGUAGE` had no
+entry for at all before this version — so those 20 real files were never
+even opened, let alone parsed, which is a different and worse gap than the
+one v1.16.0 checked. Adding `.tsx → "js"` and then testing a realistic
+`.tsx` file that actually declares a TypeScript `interface` (the way a
+typed React component's props almost always do) surfaced the real
+problem: dumping the raw parse tree showed `tree-sitter-javascript`
+doesn't recover from an `interface` block the way it recovers from, say,
+a type annotation on a single parameter. It misparses `interface Foo {`
+as the start of a labeled statement, and its error recovery then folds
+the interface's body AND every statement after it in the file — including
+the real `function` declaration and the real sinks inside it — into one
+bogus `statement_block` subtree that the taint walker's scope/call-site
+logic never descends into correctly. Not a few findings missed on a
+corrupted line; every sink in the rest of the file goes dark at once.
+Fixed by giving `.ts`/`.tsx` a dedicated `tree-sitter-typescript` grammar
+instead of reusing plain JS's (`_PARSERS_BY_EXT` in `ast_engine.py`, keyed
+by the real file extension read off `path`, checked before falling back
+to `_PARSERS["js"]` so a system without `tree-sitter-typescript` installed
+degrades to the old — mostly-fine, per v1.16.0 — behavior rather than
+breaking). Confirmed via side-by-side parse-tree dumps that the dedicated
+grammar produces `has_error=False` on the exact `interface`-plus-sink
+shape that broke plain JS, and that every node-type name the taint walker
+and `SCOPE_NODE_TYPES`/`CALL_NODE_TYPES`/`SINKS` rely on (`call_expression`,
+`member_expression`, `variable_declarator`, `function_declaration`,
+`jsx_attribute`, `lexical_declaration`, `object`, etc.) is identical
+between the two grammars — so this is parser selection only, and none of
+the existing `"js"`-keyed lookup tables needed to change. Verified
+end-to-end against `tests/fixtures/js/tsx_extension_mapping.tsx`: a SQL
+Injection and an SSRF finding past the `interface` block, previously
+invisible, both fire correctly now alongside the DOM-XSS finding that
+(by coincidence of where it sat in the file) was already firing before
+this fix.
+
+**React's `dangerouslySetInnerHTML` had zero XSS coverage (v1.23.0)**:
+same CyberSci audit, same `candidate_registry` challenge —
+`frontend/src/pages/questions/Questions.js` renders a voter's submitted
+question text and a candidate's answer text through
+`dangerouslySetInnerHTML={{ __html: question.question_text }}` straight
+from an API response, no sanitization anywhere: textbook stored XSS, and
+React does not escape this value itself (that's the entire point of the
+"dangerously" in the prop's name). Confirmed via grep across
+`patterns.py`, `ast_engine.py`, and `taint.py` that this sink — unlike a
+plain `.innerHTML =` assignment, which flagmap has always caught — had no
+coverage anywhere, despite being the canonical React DOM-XSS primitive in
+any real React/Next/Remix codebase, CyberSci's included. Added as a
+`patterns.py` regex rule matching `dangerouslySetInnerHTML={{ __html:
+EXPR }}` only when `EXPR` isn't a plain quoted string literal (a static,
+hardcoded markup fragment carries no attacker input and is a legitimate,
+common use of the prop). The first draft of that exclusion,
+`__html\s*:\s*(?!["'])`, had a backtracking bug: placing the negative
+lookahead right after a greedy `\s*` let the quantifier backtrack to
+zero-width specifically to satisfy the lookahead at the position *before*
+the whitespace, so it wrongly matched `__html: '<hr/>'` (a safe static
+literal) anyway — caught via direct `re.search()` debugging showing the
+match span stopped at the colon with no trailing whitespace consumed.
+Fixed by moving the optional whitespace inside the lookahead itself
+(`__html\s*:(?!\s*["'])`), re-verified against a static literal (no
+match), a bare member-expression value (matches), and a template literal
+with a real interpolation (matches, since a backtick string is never "just
+a static string" the way a single/double-quoted one is).
+
 **Missing Authentication Check (`authn_guard.py`, v1.15.0) and guarded-
 deserialization advice (`pickle_guard.py`, v1.15.0)** both came out of
 testing flagmap against a real attached CTF challenge rather than a

@@ -454,6 +454,19 @@ RAW_PATTERNS = [
         "possible",
     ),
     (
+        "Cross-Site Scripting (XSS) — DOM-based",
+        "js",
+        r"""dangerouslySetInnerHTML\s*=\s*\{\{\s*__html\s*:(?!\s*["'])""",
+        "medium",
+        "React's dangerouslySetInnerHTML prop is given a non-literal __html value — React does NOT escape "
+        "this, by design (the prop name says so). If the value traces back to another user's input (a "
+        "comment, a question, a profile field) rather than a sanitized/trusted source, this is stored or "
+        "reflected XSS. This is React's equivalent of a plain .innerHTML assignment above, and just as "
+        "common in real React/Next/Remix codebases.",
+        "Submit <img src=x onerror=alert(document.domain)> wherever this value's source field accepts input.",
+        "possible",
+    ),
+    (
         "Cross-Site Scripting (XSS)",
         "php",
         r"""\b(?:echo|print)\s+\$\w+\[\s*['"]?\w+['"]?\s*\]\s*;""",
@@ -1645,6 +1658,7 @@ EXTENSION_LANGUAGE = {
     ".mjs": "js",
     ".cjs": "js",
     ".ts": "js",
+    ".tsx": "js",
     ".html": "html",
     ".htm": "html",
     ".ejs": "ejs",

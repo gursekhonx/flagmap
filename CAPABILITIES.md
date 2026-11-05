@@ -34,7 +34,10 @@ Ruby/Rails, Lua, Rust):
 - Unrestricted File Upload (`move_uploaded_file`, Flask `.save()`, `multer()`
   with no extension/type allowlist)
 - Cross-Site Scripting / XSS (reflected `echo`/`print` in PHP, unescaped
-  template returns in Flask, `.innerHTML =`/`res.send()` in JS)
+  template returns in Flask, `.innerHTML =`/`res.send()` in JS, and — added
+  v1.23.0, see ARCHITECTURE.md — React's `dangerouslySetInnerHTML={{__html:
+  ...}}` given a non-literal value, the React-specific analog of a plain
+  `.innerHTML =` assignment that had zero coverage before)
 - XXE (DOMDocument/simplexml in PHP, lxml/xmltodict in Python) — with
   whole-file false-positive suppression for recognized safe-parsing
   markers (`defusedxml`, `resolve_entities=False`,

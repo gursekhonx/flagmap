@@ -30,6 +30,7 @@ pseudo-sinks, Ruby's receiver-slot html_safe, Lua's and Rust's narrower,
 collision-avoiding sink sets).
 """
 
+import os
 import re
 from dataclasses import dataclass
 from typing import List, Optional, Set
@@ -43,6 +44,16 @@ try:
     _TREE_SITTER_AVAILABLE = True
 except ImportError:
     _TREE_SITTER_AVAILABLE = False
+
+try:
+    # Dedicated .ts/.tsx grammars — see scan_ast()'s docstring for why
+    # "js" needs two extra parsers of its own rather than reusing the
+    # plain JavaScript one for every file EXTENSION_LANGUAGE maps to "js".
+    import tree_sitter_typescript as _ts_typescript
+
+    _TREE_SITTER_TYPESCRIPT_AVAILABLE = True
+except ImportError:
+    _TREE_SITTER_TYPESCRIPT_AVAILABLE = False
 
 try:
     import tree_sitter_go as _ts_go
@@ -86,6 +97,18 @@ def _make_parser(lang_capsule):
     return Parser(Language(lang_capsule))
 
 
+# Per-extension parser overrides for a language tag that EXTENSION_LANGUAGE
+# maps several real file extensions onto. Only "js" needs this today: .ts
+# and .tsx are both tagged "js" (same patterns.py regexes, same SINKS
+# table — see scan_ast()'s docstring), but parsing either one with the
+# plain JavaScript grammar chokes on TypeScript-only syntax (interface,
+# a type annotation, a generic) hard enough to corrupt everything parsed
+# after the first such construct in the file — see scan_ast() for what
+# that actually does to taint tracking. Looked up by `os.path.splitext`'s
+# second element, lowercased; a path with no entry here (a plain .js/.mjs
+# file, or this package not being installed) falls back to _PARSERS["js"].
+_PARSERS_BY_EXT: dict = {}
+
 _PARSERS = {}
 if _TREE_SITTER_AVAILABLE:
     _PARSERS["python"] = _make_parser(_ts_python.language())
@@ -99,6 +122,9 @@ if _TREE_SITTER_RUBY_AVAILABLE:
     _PARSERS["ruby"] = _make_parser(_ts_ruby.language())
 if _TREE_SITTER_LUA_AVAILABLE:
     _PARSERS["lua"] = _make_parser(_ts_lua.language())
+if _TREE_SITTER_TYPESCRIPT_AVAILABLE:
+    _PARSERS_BY_EXT[".ts"] = _make_parser(_ts_typescript.language_typescript())
+    _PARSERS_BY_EXT[".tsx"] = _make_parser(_ts_typescript.language_tsx())
 if _TREE_SITTER_RUST_AVAILABLE:
     _PARSERS["rust"] = _make_parser(_ts_rust.language())
 
@@ -1220,7 +1246,19 @@ def scan_ast(path: str, language: str, source_bytes: bytes) -> List[ASTFinding]:
     re-walks from scratch with those seeds available, so a plain helper
     function whose only taint source is what its caller passed in (not a
     route decorator) still gets its parameters seeded correctly."""
-    parser = _PARSERS.get(language)
+    # .ts/.tsx both carry language == "js" (same SINKS/CALL_NODE_TYPES/regex
+    # rules as plain JS — see patterns.py's EXTENSION_LANGUAGE), but parsing
+    # either one with the plain JavaScript grammar below is unsafe: it has no
+    # notion of TypeScript-only syntax, and a single top-level `interface` (or
+    # other construct it can't recognize) doesn't just produce one localized
+    # ERROR node the way a real syntax error would — its error recovery can
+    # fold everything parsed afterwards, including real sinks in real
+    # functions, into one bogus statement_block subtree that the taint walker
+    # never descends into correctly. A dedicated .ts/.tsx grammar's node-type
+    # names are identical to plain JS's for every construct the walker below
+    # relies on, so this swap is parser selection only — nothing else changes.
+    ext = os.path.splitext(path)[1].lower()
+    parser = _PARSERS_BY_EXT.get(ext) or _PARSERS.get(language)
     if parser is None:
         return []
     try:

@@ -254,3 +254,38 @@ entry below.
   `tests/fixtures/...`, which the pre-existing `tests/` segment check
   already matches unconditionally — so it was verified directly against
   the real file and a dozen adversarial cases instead; see ARCHITECTURE.md's "Testing" section.
+- ~~Map `.tsx` to the JS language tag, and give `.ts`/`.tsx` their own
+  dedicated tree-sitter grammar~~ — added in v1.23.0, see ARCHITECTURE.md.
+  Found auditing flagmap against CyberSci's own official past-challenges
+  repo (`CyberSci/PastChallenges`): nationals-2024-25's defence challenges
+  ship real React+Remix frontends (`voter_registry`, `candidate_registry`)
+  whose route/component files are `.tsx` — an extension with no entry in
+  `EXTENSION_LANGUAGE` at all before this, so every one of those 20 real
+  files was skipped outright, invisible to both the regex layer and the AST
+  engine. Mapping it to `"js"` alone wasn't enough, though: a top-level
+  TypeScript-only construct like an `interface` declaration isn't a
+  localized, recoverable parse error under plain `tree-sitter-javascript` —
+  its error recovery folds the interface AND every real function after it
+  in the same file into one bogus `statement_block`/`labeled_statement`
+  subtree, silently breaking taint tracking for the rest of the file
+  (confirmed via direct AST dumps). Fixed by giving `.ts`/`.tsx` their own
+  `tree-sitter-typescript` grammar (`_PARSERS_BY_EXT` in `ast_engine.py`,
+  keyed by real file extension, falling back to plain JS if the package
+  isn't installed), confirmed via side-by-side parse-tree comparison to
+  produce `has_error=False` on the exact problem shape with identical
+  node-type names to plain JS for every construct the taint walker relies
+  on — so none of the existing "js"-keyed tables needed to change.
+- ~~React's `dangerouslySetInnerHTML={{__html: ...}}` as an XSS sink~~ —
+  added in v1.23.0 via a `patterns.py` regex rule, see CAPABILITIES.md.
+  Found in the same CyberSci audit: nationals-2024-25's `candidate_registry`
+  defence challenge renders a voter's submitted question text and a
+  candidate's answer text through this exact prop straight from an API
+  response, with zero sanitization anywhere — stored XSS, and previously
+  invisible to flagmap despite being the canonical React DOM-XSS primitive
+  (unlike a plain `.innerHTML =` assignment, which was already covered).
+  Matches only a non-literal `__html` value (a bare identifier, member
+  expression, or template literal with an interpolation), not a static
+  quoted string — the regex's first draft had a backtracking bug that let
+  its negative lookahead match a static literal anyway by letting the
+  preceding `\s*` backtrack to zero width; fixed by moving the whitespace
+  inside the lookahead itself.
