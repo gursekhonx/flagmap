@@ -26,6 +26,7 @@ from .vendor_guard import is_vendor_file, NOISY_IN_VENDOR_FILES
 from .ast_engine import scan_ast, AST_SUPPORTED_LANGUAGES
 from .jenkins_pipeline_guard import find_jenkins_param_injection, GROOVY_LANGUAGES
 from .zipslip_guard import find_zip_slip, ZIP_LANGUAGES
+from .jsp_cookie_xss_guard import find_jsp_cookie_xss, JSP_EXTENSIONS
 
 # No hand-written vulnerable application code is ever a single line this long —
 # only minified/bundled vendor files (tailwindcss.js, jquery.min.js, etc.) are,
@@ -467,6 +468,36 @@ def scan_lines(path: str, language: str, lines: List[str], patterns: list) -> Li
                 payload="Craft a zip whose entry filename is a path-traversal string such as "
                         "\"../../../../tmp/pwned\" (or an absolute path) so extraction writes outside the "
                         "intended directory.",
+                confidence="likely",
+            ))
+
+    # best-effort JSP cookie XSS: a Cookie's own .getValue() is assigned
+    # to a plain variable somewhere in the file, and that same variable
+    # is later echoed through a <%= %> expression tag with no escaping
+    # call — patterns.py's own JSP XSS rule only matches a
+    # request.getParameter/getAttribute(...) call written directly
+    # inside the tag; this covers the cookie-sourced case it deliberately
+    # leaves out. See jsp_cookie_xss_guard.py's module docstring.
+    if path.endswith(JSP_EXTENSIONS):
+        for jf in find_jsp_cookie_xss(path, language, lines):
+            key = (jf.line_no, "Cross-Site Scripting (XSS)")
+            if key in seen:
+                continue
+            seen.add(key)
+            findings.append(Finding(
+                file=jf.file,
+                line_no=jf.line_no,
+                line_text=jf.line_text,
+                vuln_name="Cross-Site Scripting (XSS)",
+                severity="high",
+                why="This <%= %> expression tag echoes a variable that was assigned, somewhere earlier in "
+                    "the file, from a Cookie's own .getValue() inside a request.getCookies() loop — not a "
+                    "string literal. JSP's <%= %> tag is always raw/unescaped by design, so a cookie value "
+                    "(fully attacker-controlled: cookies are set by the browser, not validated server-side "
+                    "here) reflected this way is stored/reflected XSS, even though no "
+                    "request.getParameter()/getAttribute() call appears anywhere on this line.",
+                payload="Set the cookie this variable is read from to a value like "
+                        "\"\\\"><script>alert(document.domain)</script>\".",
                 confidence="likely",
             ))
 

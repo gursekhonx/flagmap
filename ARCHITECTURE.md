@@ -642,6 +642,111 @@ guard in this file — real signal on zero prior coverage, confirmed true
 on the one real motivating bug, confirmed to produce no stray hits
 anywhere else in the corpus.
 
+**Starting with this entry, evidence also comes from other CTFs in
+CyberSci's own style, not only CyberSci's own archive.** The CyberSci
+corpus audit had worked through every web-relevant folder worth a
+careful look; to keep finding real gaps rather than guessing at
+speculative ones, the next step was pulling in full public source +
+writeup releases from OTHER web-exploitation CTFs built the same way
+CyberSci's nationals/regionals are — custom Flask/FastAPI/PHP/Go/Ruby
+apps with one or two intended bugs each, shipped with a Docker Compose
+stack and (crucially, for verifying flagmap's output against ground
+truth) a published solve script and writeup. `DownUnderCTF/
+Challenges_2025_Public` and `Challenges_2024_Public` (GitHub) were the
+first such source: 17 web challenges across two years, every one with
+its own `WRITEUP.md` and `solve/solve.py`. The same audit method
+applies as before — run flagmap, read the writeup, and only add a check
+when flagmap visibly missed a *real*, confirmed line of the actual bug
+the writeup describes. Most of the 17 challenges turned out to already
+be fully covered (several, like Go integer-truncation and Python
+format-string injection via `.format()`, by rules precise enough to
+land on the exact right line on the first try) or to be out of scope by
+the same standards the CyberSci audit used (pure client-side JS
+sandbox-escape puzzles, HTTP request-smuggling/cookie-ordering attacks
+that live in the HTTP stack rather than any one line of source, a
+hand-rolled binary session-serialization integer-overflow bug unique to
+one challenge's own custom wire format). This entry's "sweet_treat" gap
+below is the one that was real.
+
+**JSP cookie-sourced XSS — `jsp_cookie_xss_guard.py` (v1.28.0)**: found
+in DownUnderCTF 2025's public "sweet_treat" web challenge.
+`patterns.py` already has a dedicated JSP XSS rule (its own comment
+explains the trade-off): it matches `<%= request.getParameter(...) %>`/
+`<%= request.getAttribute(...) %>` — a request value read and printed
+on the SAME line — and deliberately nothing broader, because "any
+non-literal `<%= %>`" would fire on nearly every JSP page (JSP's `<%=
+%>` tag has no "safe" form to contrast against, unlike most templating
+engines). That's a reasonable line, but the real challenge's bug sits
+just past it, in two separate files:
+
+```java
+String lang = "en";
+Cookie[] cookies = request.getCookies();
+if (cookies != null) {
+    for (Cookie c : cookies) {
+        if ("language".equals(c.getName())) {
+            lang = c.getValue();
+        }
+    }
+}
+...
+<html lang="<%= lang %>">
+```
+
+Never a `request.getParameter()`/`getAttribute()` call anywhere near the
+`<%= %>` tag — the taint arrives several lines earlier, through a
+`Cookie[]` loop and a `.getValue()` call, into a plain local variable.
+`index.jsp` and `admin/admin-review.jsp` both have the identical shape
+(same cookie name, `"language"`, same variable name, `lang`), and
+`index.jsp` is the clincher for this being a real, not theoretical, gap:
+it defines its own `escapeHtml(String s)` helper and correctly calls it
+two lines later for a different value (`<%= escapeHtml(user) %>`) — the
+developer plainly knew JSP needs manual escaping and simply missed this
+one cookie-sourced spot, exactly the "escaped everywhere except here"
+shape this project's rules are written to catch.
+
+`jsp_cookie_xss_guard.py` is a three-signal, whole-file, regex-only
+module (no AST sink category fits JSP's mixed scriptlet/template syntax
+at all): (1) a `for (Cookie <var> : ...)` loop; (2) that same loop
+variable's own `.getValue()` assigned to a plain variable anywhere in
+the file; (3) that variable referenced inside a `<%= %>` tag with none
+of a short list of recognized escaping calls (`escapeHtml(`,
+`StringEscapeUtils.escapeHtml4(`, `fn:escapeXml(`, `Encode.forHtml(`,
+`ESAPI.encoder().encodeForHTML(`) present in the same tag. Requiring
+signal (2)'s receiver to be the EXACT variable bound by signal (1)'s
+loop, rather than matching any `\w+.getValue()` assignment at all,
+caught a real precision bug during development: an earlier draft used
+the looser form, and `admin/admin.jsp` — in the very same challenge —
+has `HttpSession s = entry.getValue();`, iterating a `Map<String,
+HttpSession>`'s entries (a same-named method on a completely unrelated,
+non-attacker-controlled type). The looser draft would have treated `s`
+as cookie-tainted; nothing in this corpus happened to echo `s` through a
+`<%= %>` tag, so it produced no VISIBLE false positive, but the latent
+imprecision was real and worth fixing before it hit a file that did.
+
+Verified two ways: against the CyberSci corpus, where the total finding
+count is unchanged (confirming zero cross-contamination from a check
+gated on `.jsp` files, which don't exist anywhere in that corpus), and
+against the full DownUnderCTF 2024+2025 public archive, where it fires
+exactly twice — `index.jsp:48` and `admin/admin-review.jsp:94`, the two
+real bugs — with no other hits anywhere, including in the three other
+`.jsp` files in the same challenge that read cookies the same way but
+never echo them (`edit_profile.jsp`, confirmed correctly silent: it
+reads the same `lang` cookie but never prints it anywhere).
+
+Deliberately scoped to the cookie-sourced case only, not the broader
+"any variable later used in a `<%= %>` tag that originated from a
+database read" case also present in the same challenge (`aboutMe`,
+sourced from a SQL query result in `admin-review.jsp`) — deciding which
+DB reads count as "tainted" at all is a much harder line to draw safely
+without a second real, corroborating occurrence the way the cookie case
+has (two files, same exact shape). Known blind spots: no cross-file/
+include tracking; a variable name reused for an unrelated purpose later
+in the same file could in principle false-positive (not observed); and
+an escaping helper under a name this module doesn't recognize would be
+wrongly flagged. Accepted on the same terms as every other best-effort
+guard in this project.
+
 **Missing Authentication Check (`authn_guard.py`, v1.15.0) and guarded-
 deserialization advice (`pickle_guard.py`, v1.15.0)** both came out of
 testing flagmap against a real attached CTF challenge rather than a

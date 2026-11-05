@@ -48,7 +48,15 @@ Ruby/Rails, Lua, Rust):
   template returns in Flask, `.innerHTML =`/`res.send()` in JS, and — added
   v1.23.0, see ARCHITECTURE.md — React's `dangerouslySetInnerHTML={{__html:
   ...}}` given a non-literal value, the React-specific analog of a plain
-  `.innerHTML =` assignment that had zero coverage before)
+  `.innerHTML =` assignment that had zero coverage before; and — added
+  v1.28.0, see `jsp_cookie_xss_guard.py`/ARCHITECTURE.md — a JSP
+  `<%= %>` tag echoing a variable assigned from a `Cookie`'s own
+  `.getValue()` inside a `request.getCookies()` loop, with no escaping
+  call in the tag. Distinct from the narrow JSP `<%= request.
+  getParameter(...) %>` rule described further below, which only matches
+  `request.getParameter()`/`getAttribute()` called directly inside the
+  `<%= %>` tag — this catches the cookie-sourced case that rule
+  deliberately leaves out)
 - XXE (DOMDocument/simplexml in PHP, lxml/xmltodict in Python) — with
   whole-file false-positive suppression for recognized safe-parsing
   markers (`defusedxml`, `resolve_entities=False`,
@@ -274,7 +282,9 @@ Ruby/Rails, Lua, Rust):
 - A narrow JSP `<%= request.getParameter(...) %>` / `<%= request.getAttribute(...) %>`
   direct-output XSS (deliberately narrow: JSP's `<%= %>` tag has no "safe"
   form to contrast against, so this only catches the direct-from-request
-  subset, not e.g. a stored/DB value reflected the same way)
+  subset, not e.g. a stored/DB value reflected the same way — though the
+  cookie-sourced subset of that gap is now covered too, see the Cross-Site
+  Scripting bullet above and `jsp_cookie_xss_guard.py`, v1.28.0)
 - Unrestricted File Upload via the *receiver* shape, not just an argument:
   `f.save(path)` where `f` itself came from `request.files[...]` a few lines
   earlier (distinct from, and complementary to, the argument-based taint

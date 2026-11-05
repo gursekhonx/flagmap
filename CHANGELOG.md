@@ -413,3 +413,44 @@ entry below.
   "/", raw_name))` line) and that same challenge's own
   `solve_files/create_zip.py` (only ever *creates* a zip, confirmed zero
   false positive since it touches none of this check's signals).
+- ~~JSP cookie-sourced XSS, not just a direct `request.getParameter()`/
+  `getAttribute()` call inside `<%= %>`~~ — added in v1.28.0, see
+  ARCHITECTURE.md and CAPABILITIES.md. From this point on, evidence for
+  new flagmap checks also comes from publicly released past challenges
+  of OTHER web-exploitation CTFs in the same style as CyberSci's own
+  nationals/regionals (not just CyberSci's own archive) — this entry's
+  motivating evidence is DownUnderCTF 2025's public "sweet_treat" web
+  challenge (`DownUnderCTF/Challenges_2025_Public` on GitHub), found
+  while auditing it the same way the CyberSci corpus was audited:
+  running flagmap, then checking its findings against the challenge's
+  own published `WRITEUP.md`. `patterns.py` already has a JSP XSS rule,
+  but its own comment is explicit about the line it draws: it ONLY
+  matches `request.getParameter(...)`/`request.getAttribute(...)` called
+  directly inside a `<%= %>` tag, on the same line — deliberately, to
+  avoid a blanket "any non-literal `<%= %>`" rule firing on nearly every
+  JSP page. That line leaves a real gap on the other side of it: a
+  cookie's value, read out through `Cookie[] request.getCookies()` + a
+  `for (Cookie c : cookies)` loop + `c.getValue()`, assigned to a plain
+  variable, and THAT variable echoed raw several lines later — never a
+  `request.getParameter()`/`getAttribute()` call anywhere on the line.
+  Confirmed in TWO separate files in the same challenge
+  (`index.jsp:48` and `admin/admin-review.jsp:94`, both
+  `<html lang="<%= lang %>">`), and `index.jsp` even defines and
+  correctly uses its own `escapeHtml(...)` helper for a DIFFERENT value
+  two lines later — proof the developer knew to escape and simply missed
+  this one spot. Added `jsp_cookie_xss_guard.py`, a three-signal
+  whole-file check: a `for (Cookie <var> : ...)` loop's own loop
+  variable, that SAME variable's `.getValue()` assigned to a plain
+  variable, and that variable referenced inside a `<%= %>` tag with no
+  recognized escaping call (`escapeHtml(`, `StringEscapeUtils.
+  escapeHtml4(`, `fn:escapeXml(`, `Encode.forHtml(`,
+  `ESAPI.encoder().encodeForHTML(`). Caught and fixed one of its own
+  precision bugs during development: an earlier draft matched ANY
+  `\w+.getValue()` assignment, which would have wrongly treated
+  `admin/admin.jsp`'s unrelated `HttpSession s = entry.getValue();`
+  (iterating a `Map<String, HttpSession>`, nothing to do with cookies)
+  as cookie-tainted — fixed by requiring the `.getValue()` receiver to
+  be the exact variable bound by a real `Cookie` loop. Verified against
+  both the CyberSci corpus (count unchanged, confirming zero
+  cross-contamination) and the full DownUnderCTF 2024+2025 public
+  archive: exactly the two real hits, zero false positives elsewhere.
