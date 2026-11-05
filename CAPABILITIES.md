@@ -477,6 +477,12 @@ again specifically in CTF/training contexts:
   base image* (`FROM gotenberg/gotenberg:8.0.3` in a Dockerfile) rather
   than a language-ecosystem manifest — see "Parsed manifests/lockfiles"
   below for how that's matched.
+- **strapi-plugin-email-designer** (any version, added v1.40.0) — no
+  assigned CVE and no fixed release known: the plugin renders email
+  templates with the same unsandboxed lodash template Strapi core fixed as
+  CVE-2023-22621, so editing a template is server-side JavaScript
+  execution. The first entry with `fixed_in=None` ("no fix exists"),
+  which the table now supports for exactly that case.
 
 Parsed manifests/lockfiles: `requirements.txt` (exact `==` pins only —
 a range like `flask>=1.0` tells you nothing about what actually got

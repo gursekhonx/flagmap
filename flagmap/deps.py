@@ -125,7 +125,10 @@ class DepFinding:
 # Keyed by ecosystem -> normalized package name -> list of entries. Each
 # entry is checked as: vulnerable if min_version <= version < fixed_in
 # (min_version=None means "no lower bound", i.e. any version below
-# fixed_in"). Multiple entries per package let one package have several
+# fixed_in"). fixed_in=None (v1.40.0) means "no fixed release known when
+# this entry was added" — every version at or above min_version matches;
+# used only where the upstream project never shipped a fix, never as a
+# shortcut for "didn't look it up". Multiple entries per package let one package have several
 # independently-fixed CVEs across different branches/eras — all entries
 # that match are reported, since that's an accurate (if cluttered) picture
 # of "all the known-bad things about the exact version you shipped."
@@ -185,6 +188,27 @@ CVE_TABLE = {
         ],
     },
     "node": {
+        # From DownUnderCTF 2023's public "strapi-in" web challenge, whose
+        # package-lock.json resolves strapi-plugin-email-designer 2.1.2. The
+        # plugin renders admin-authored email templates with the same
+        # unsandboxed lodash-template approach Strapi core shipped before
+        # its CVE-2023-22621 fix, so `<%= ... %>` in a template is
+        # server-side JavaScript; the challenge's solve is a template using
+        # process.binding("spawn_sync") to run a shell. The reporter's
+        # upstream issue (alexzaganelli/strapi-plugin-email-designer#123)
+        # records no fixed plugin release — hence fixed_in=None.
+        "strapi-plugin-email-designer": [
+            {"min_version": None, "fixed_in": None,
+             "cve": "no assigned CVE — see alexzaganelli/strapi-plugin-email-designer#123",
+             "severity": "high",
+             "why": "Email templates are rendered with an unsandboxed lodash template, the same SSTI Strapi "
+                    "core fixed as CVE-2023-22621, which this plugin copied — anyone who can create or edit a "
+                    "template (an authenticated admin-panel user, often a low-privilege author) gets "
+                    "server-side JavaScript execution when the template is rendered. No fixed plugin release "
+                    "is known.",
+             "fix": "Remove the plugin or replace it with a fork that renders templates with a logic-less "
+                    "engine (e.g. Mustache); treat template-edit permission as code execution until then."},
+        ],
         "lodash": [
             {"min_version": None, "fixed_in": "4.17.21", "cve": "CVE-2021-23337", "severity": "high",
              "why": "lodash's template() allows command injection via the 'variable' option / a crafted "
@@ -321,11 +345,14 @@ def _cmp_padded(a: Tuple[int, ...], b: Tuple[int, ...]) -> int:
 
 def _matches_entry(version: str, entry: dict) -> bool:
     vt = _parse_version(version)
-    ft = _parse_version(entry["fixed_in"])
-    if vt is None or ft is None:
+    if vt is None:
         return False
-    if _cmp_padded(vt, ft) >= 0:
-        return False  # version >= fixed_in: not vulnerable to this entry
+    if entry["fixed_in"] is not None:
+        ft = _parse_version(entry["fixed_in"])
+        if ft is None:
+            return False
+        if _cmp_padded(vt, ft) >= 0:
+            return False  # version >= fixed_in: not vulnerable to this entry
     if entry["min_version"] is not None:
         mt = _parse_version(entry["min_version"])
         if mt is not None and _cmp_padded(vt, mt) < 0:

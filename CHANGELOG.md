@@ -856,3 +856,18 @@ entry below.
   for code-chosen lookup keys); per-finding corpus diff shows only DUCTF
   2023 104 → 106, the real line in `src/` and `publish/`; all other
   corpora unchanged; `patterns.py` self-scan unchanged at 8.
+- ~~Vulnerable npm plugin with no fixed release
+  (`strapi-plugin-email-designer`)~~ — added in v1.40.0, see
+  ARCHITECTURE.md and CAPABILITIES.md. From DownUnderCTF 2023's public
+  "strapi-in" challenge: the lockfile resolves the plugin at 2.1.2, which
+  renders email templates with the same unsandboxed lodash template
+  Strapi core fixed as CVE-2023-22621 — a saved template containing
+  `<%= ... process.binding("spawn_sync") ... %>` runs a shell. flagmap
+  only reported the `.env`. The plugin never shipped a fix (upstream
+  issue #123), so `CVE_TABLE` entries now accept `fixed_in=None`
+  ("no fixed release known"), handled explicitly in `_matches_entry`
+  rather than via a made-up sentinel version. Verified: new
+  `deps/case3` fixture (plugin expected; fixed lodash 4.17.21 and Strapi
+  4.12.4 quiet), 222/222 regression; per-finding corpus diff shows only
+  DUCTF 2023 106 → 110 (`package-lock.json` and `yarn.lock` in `src/`
+  and `publish/`); `deps.py` self-scan unchanged at its pre-existing 2.

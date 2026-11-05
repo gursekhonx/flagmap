@@ -2147,6 +2147,36 @@ and `publish/` copies). CyberSci, DUCTF 2024 and 2025 unchanged — the
 `get_json()` fix added nothing in any corpus, it only closes the gap in
 principle. `patterns.py` self-scan unchanged at 8.
 
+**Unfixed vulnerable npm plugin (`deps.py`, v1.40.0)**: from DownUnderCTF
+2023's public "strapi-in" challenge. The custom code is a thin API
+calling `strapi.plugin('email-designer').service('email')
+.sendTemplatedEmail(...)`; the bug is the dependency itself.
+`package-lock.json` resolves `strapi-plugin-email-designer` 2.1.2, which
+renders admin-authored templates with the same unsandboxed lodash-template
+approach Strapi core shipped before its CVE-2023-22621 fix. The solve: log
+in with the provided author account, save a template containing
+`<%= ... process.binding("spawn_sync").spawn(...) ... %>`, and trigger a
+send. flagmap only reported the `.env` file.
+
+The plugin never shipped a fix — the reporter's upstream issue
+(alexzaganelli/strapi-plugin-email-designer#123) records none, and the
+maintainer didn't respond — so there's no honest `fixed_in` to write.
+`CVE_TABLE` entries now accept `fixed_in=None`, meaning "no fixed release
+known when this entry was added": every parseable version at or above
+`min_version` matches. `_matches_entry` handles it explicitly instead of
+the entry carrying a made-up sentinel version, and the table's header
+comment states that `None` is for a genuinely unfixed project, not a
+shortcut for an unchecked one. (Strapi core 4.12.4 in the same lockfile
+is past both the 4.5.6 SSTI fix and the 4.8.0 account-takeover fix, so it
+correctly gets no entry.)
+
+Verified with a new `tests/fixtures/deps/case3/` lockfile — the plugin
+(expected), plus a fixed `lodash` 4.17.21 and `@strapi/strapi` 4.12.4
+(both must stay quiet) — 222/222 regression. Per-finding corpus diff:
+DUCTF 2023 106 → 110, the plugin in `package-lock.json` and `yarn.lock`
+in both `src/` and `publish/`; every other corpus unchanged. `deps.py`
+self-scan unchanged at its pre-existing 2.
+
 `report_md.py` deliberately has no fixture category of its own: it's a
 pure renderer over `Finding`/`Chain` objects the regression suite above
 already exercises and validates, with no detection logic of its own to

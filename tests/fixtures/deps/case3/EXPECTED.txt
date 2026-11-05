@@ -1,0 +1,1 @@
+strapi-plugin-email-designer@2.1.2 (no assigned CVE — see alexzaganelli/strapi-plugin-email-designer#123)
