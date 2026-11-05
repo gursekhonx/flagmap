@@ -123,7 +123,10 @@ Ruby/Rails, Lua, Rust):
 - Debug Mode Enabled (Flask `debug=True`, Django `DEBUG=True`, forced
   `display_errors`)
 - Weak Auth Logic (PHP loose `==` type juggling, `strcmp` bypass, hardcoded
-  secrets)
+  secrets; and — added v1.36.0, see `xff_trust_guard.py`/ARCHITECTURE.md,
+  Python/JS/Go/PHP — a client IP read from the `X-Forwarded-For`/
+  `X-Real-IP` header in a file that also makes an IP-allowlist decision
+  with it, since that header is client-controlled)
 - Missing CSRF Protection (best-effort: a POST form with no CSRF token
   anywhere in the file)
 - Missing Authorization / IDOR (best-effort, added v1.6.0, Python/JS/PHP/

@@ -1941,6 +1941,79 @@ DUCTF 2023 99 → 100, the one real hit. Fixtures in the shared
 `tests/fixtures/python/vuln_sinks.py`/`clean_sinks.py`: the real line,
 plus the default and explicit-`False` forms as negatives.
 
+**Client-IP allowlist trusted from `X-Forwarded-For` (`xff_trust_guard.py`,
+v1.36.0)**: three real DownUnderCTF challenges, two years apart, make
+the same mistake. 2023's "proxed" and "actually-proxed" share one Go
+server:
+
+```go
+xff := r.Header.Values("X-Forwarded-For")
+ip := strings.Split(r.RemoteAddr, ":")[0]
+if xff != nil {
+    ips := strings.Split(xff[len(xff)-1], ", ")
+    ip = ips[len(ips)-1]
+    ip = strings.TrimSpace(ip)
+}
+if ip != "31.33.33.7" { /* 403 */ } else { /* flag */ }
+```
+
+and 2025's "sodium" has the Python version:
+
+```python
+forwarded_for = headers.get("x-forwarded-for", "").strip()
+if config.authorized_ips and forwarded_for not in config.authorized_ips:
+    ...  # 403
+```
+
+`X-Forwarded-For` is a request header like any other — the client sets
+it, and a proxy in front only appends. "proxed" falls to one `curl -H
+'X-Forwarded-For: 31.33.33.7'`; "actually-proxed" puts a hand-written
+proxy in front that appends the real IP only to the *first* copy of the
+header, while the server reads the *last*, so sending it twice wins;
+"sodium" reaches its backend through request smuggling and then just
+sends `X-Forwarded-For: 127.0.0.1`. flagmap reported nothing for any of
+the three.
+
+Two whole-file signals, filed under the existing "Weak Auth Logic" name:
+
+1. A *read* of `X-Forwarded-For`/`X-Real-IP`: `Header.Get/Values(...)`,
+   `headers.get(...)`/`headers[...]`, `req.get(...)`/`req.header(...)`,
+   `$_SERVER['HTTP_X_FORWARDED_FOR']`, `environ.get('HTTP_X_...')`. The
+   regex requires one of those call/subscript openers immediately before
+   the quoted header name, which deliberately excludes the two
+   non-read shapes the corpora actually contain: a dict literal that
+   *sets* the header (CyberSci's `voter_registry` attack bot builds
+   `{"X-Forwarded-For": ip_address}` for its own outbound requests), and
+   a proxy comparing a header *name* to the string (`strings.ToLower(
+   v[0]) == "x-forwarded-for"` in "actually-proxed"'s proxy).
+2. An IP-allowlist-shaped decision anywhere in the same file: equality
+   or inequality against a quoted dotted-quad literal, or membership in
+   a collection named like an allowlist (`in authorized_ips`,
+   `trusted_proxies`, `allowlist.includes(...)`).
+
+The second signal is what separates an access decision from the very
+common, harmless practice of reading the header just to log it. The
+finding lands on the read line — the place the untrusted value enters,
+and the same shape in all three files however the comparison is spelled.
+
+The first self-scan caught a self-referential trap of the familiar kind:
+the docstring quoted `r.Header.Values("X-Forwarded-For")`, `headers.get(
+"x-forwarded-for", "")` and `ip != "31.33.33.7"`, so the module's own
+source satisfied both signals. Paraphrased with `<placeholders>`.
+
+Verified with the per-finding corpus diff: CyberSci unchanged at 392;
+DUCTF 2023 100 → 102 ("proxed" and "actually-proxed" `secret_server`
+line 21 — the proxy file correctly stays quiet); DUCTF 2025 146 → 147
+("sodium" line 99); DUCTF 2024 unchanged. Dedicated fixtures because it's
+a whole-file check: `tests/fixtures/go/xff_trust_vuln.go`/`_clean.go`
+(the real shape; a logging-only read) and
+`tests/fixtures/python/xff_trust_vuln.py`/`_clean.py` (the sodium shape;
+an outbound dict that sets the header, in a file that does have an
+allowlist check on the real peer address).
+
+Known blind spots: no cross-file tracking; IPv6 literals and CIDR checks
+(`ip_address(x) in ip_network(...)`) aren't recognized as decisions.
+
 `report_md.py` deliberately has no fixture category of its own: it's a
 pure renderer over `Finding`/`Chain` objects the regression suite above
 already exercises and validates, with no detection logic of its own to

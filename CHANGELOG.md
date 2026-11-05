@@ -769,3 +769,33 @@ entry below.
   cases — default and explicit `follow_symlinks=False`); CyberSci,
   DUCTF 2024 and DUCTF 2025 unchanged (392/95/146); DUCTF 2023 goes from
   99 to 100, exactly the real hit; `patterns.py` self-scan unchanged at 8.
+- ~~Client-IP allowlist decided from the `X-Forwarded-For` header~~ —
+  added in v1.36.0, see ARCHITECTURE.md and CAPABILITIES.md. Three real
+  occurrences across two DownUnderCTF years: 2023's "proxed" and
+  "actually-proxed" share the same Go `secret_server`
+  (`xff := r.Header.Values("X-Forwarded-For")` → last entry becomes `ip`
+  → `if ip != "31.33.33.7"` gates the flag), and 2025's "sodium"
+  (`forwarded_for = headers.get("x-forwarded-for", "")` → `if
+  forwarded_for not in config.authorized_ips` → 403). The header is set
+  by the client — a proxy only appends to it — so all three are bypassed
+  by sending the allowed IP yourself (twice, in "actually-proxed", whose
+  hand-written proxy only appends to the first copy). flagmap reported
+  nothing for any of them. Added `xff_trust_guard.py`, a two-signal
+  whole-file check under the existing "Weak Auth Logic" name: (1) a
+  READ of `X-Forwarded-For`/`X-Real-IP` from the request
+  (`Header.Get/Values`, `headers.get`/`headers[...]`, `req.get`,
+  `$_SERVER[HTTP_X_...]`, `environ`), deliberately excluding a dict
+  literal that SETS the header and a proxy comparing a header name to
+  that string; and (2) an IP-allowlist-shaped decision anywhere in the
+  same file (equality against a literal dotted-quad, or membership in an
+  `*ips`/`allowlist`/`trusted*`-named collection). Fires on the read
+  line. Hit a self-referential trap on the first self-scan: the module
+  docstring quoted the real header reads and the real IP comparison, so
+  it satisfied both of its own signals — paraphrased with placeholders.
+  Verified: 208/208 regression (dedicated Go and Python vuln/clean
+  fixtures — clean cases are a logging-only read and an outbound dict
+  setting the header); CyberSci unchanged at 392 (its one
+  `X-Forwarded-For` mention is an attack bot *setting* the header, which
+  correctly doesn't fire); DUCTF 2023 100 → 102 and DUCTF 2025 146 → 147,
+  exactly the three real hits; DUCTF 2024 unchanged; both
+  `xff_trust_guard.py` and `scanner.py` self-scan clean.

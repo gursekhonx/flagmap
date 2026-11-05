@@ -29,6 +29,7 @@ from .zipslip_guard import find_zip_slip, ZIP_LANGUAGES
 from .jsp_cookie_xss_guard import find_jsp_cookie_xss, JSP_EXTENSIONS
 from .class_pollution_guard import find_class_pollution, CLASS_POLLUTION_LANGUAGES
 from .forin_prefix_pollution_guard import find_forin_prefix_pollution, FORIN_PREFIX_LANGUAGES
+from .xff_trust_guard import find_xff_trust, XFF_LANGUAGES
 
 # No hand-written vulnerable application code is ever a single line this long —
 # only minified/bundled vendor files (tailwindcss.js, jquery.min.js, etc.) are,
@@ -561,6 +562,33 @@ def scan_lines(path: str, language: str, lines: List[str], patterns: list) -> Li
                 payload="Send a property named with this prefix followed by \"__proto__\", e.g. "
                         "{\"prefix.__proto__\": {\"polluted\": true}}, adjusting \"prefix\" to the real "
                         "prefix constant this code checks for.",
+                confidence="possible",
+            ))
+
+    # best-effort "client-IP allowlist decided from X-Forwarded-For /
+    # X-Real-IP" — a client-controlled header used as the trusted client
+    # address. Two whole-file signals: a read of that header, plus an
+    # IP-allowlist-shaped comparison somewhere in the same file. See
+    # xff_trust_guard.py's module docstring.
+    if language in XFF_LANGUAGES:
+        for xf in find_xff_trust(path, language, lines):
+            key = (xf.line_no, "Weak Auth Logic")
+            if key in seen:
+                continue
+            seen.add(key)
+            findings.append(Finding(
+                file=xf.file,
+                line_no=xf.line_no,
+                line_text=xf.line_text,
+                vuln_name="Weak Auth Logic",
+                severity="high",
+                why="This line reads the client IP from the X-Forwarded-For / X-Real-IP request header, and "
+                    "this same file makes an IP-allowlist decision (a comparison against a literal IP, or a "
+                    "membership test against an allowlist). That header is set by the client: a proxy only "
+                    "appends to it, if there is one at all, so the attacker can claim any address — including "
+                    "the one the allowlist trusts.",
+                payload="Send X-Forwarded-For: <the allowed IP> (e.g. 127.0.0.1). If a proxy appends the real "
+                        "address, try sending the header twice, or a comma list ending in the allowed IP.",
                 confidence="possible",
             ))
 
