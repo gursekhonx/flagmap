@@ -4,7 +4,7 @@ inline_script.py — scan the JavaScript inside an HTML file's inline
 
 flagmap picks a language per FILE by extension, so a `.html` file is only
 ever matched against the "html" rules (forms, CSRF, ...) and the
-"generic" ones. Every JavaScript rule — `.innerHTML =`, `eval(`,
+"generic" ones. Every JavaScript rule — `.innerHTML =`, eval calls,
 `document.write(`, `location = ...` — is scoped to "js", so JavaScript
 written inline in a page was never looked at by any of them.
 

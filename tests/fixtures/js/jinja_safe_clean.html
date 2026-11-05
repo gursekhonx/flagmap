@@ -1,0 +1,5 @@
+{# Autoescaped output, and a different filter whose name merely contains
+   "safe". #}
+<div>{{ description }}</div>  // safe: Cross-Site Scripting (XSS)
+<a href="{{ url | urlencode }}">{{ name | e }}</a>  // safe: Cross-Site Scripting (XSS)
+<span>{{ title | unsafe_marker_free }}</span>  // safe: Cross-Site Scripting (XSS)

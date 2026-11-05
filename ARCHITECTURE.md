@@ -2299,6 +2299,40 @@ renders in "factory_defaults") and −3 constant-markup assignments in
 `// safe:` rather than an HTML comment, because the harness's marker
 regex would otherwise capture the trailing `-->` into the vuln name.
 
+**Jinja2/Django `|safe` (`patterns.py`, v1.44.0)**: two real LA CTF
+templates turn autoescaping off for user content. 2024 "ctf-wiki":
+
+```python
+content = markdown(description)
+return render_template("view.html", ..., description=content)
+```
+```html
+<div class="ctfer-info">{{ description | safe }}</div>
+```
+
+Python-Markdown passes raw HTML through, so a profile description of
+`<script>...` runs for anyone viewing it — the challenge's intended
+unauthenticated XSS (the rest of the solve is a SameSite=Lax trick to use
+it against the logged-in admin). 2026 "blogler" has the same shape with
+mistune: `{{ blog["content"]|safe }}`.
+
+flagmap's template coverage was all on the server side (`render_template_
+string`, raw HTML returned from a view); nothing read the template files
+themselves. Jinja2 and Django escape every `{{ }}` by default and `|safe`
+is the explicit opt-out, so it marks exactly where escaping was switched
+off. New `"html"`-language rule: `\{\{[^}]*\|\s*safe\b[^}]*\}\}`, filed as
+"Cross-Site Scripting (XSS)", "medium"/"possible" since whether the value
+is user-controlled lives in the view, not the template. The `\|\s*safe\b`
+anchor keeps filters that merely contain the word (`|unsafe_x`) out.
+
+Verified: per-finding corpus diff LA CTF 173 → 175 — exactly the two
+templates — with every other corpus unchanged (CyberSci's Flask
+challenges don't use `|safe` anywhere). Fixtures:
+`tests/fixtures/js/jinja_safe_vuln.html`/`_clean.html`. Housekeeping in
+the same release: the post-release self-scan of v1.43.0's
+`inline_script.py` found its docstring matching the generic `eval(`
+rule; reworded.
+
 `report_md.py` deliberately has no fixture category of its own: it's a
 pure renderer over `Finding`/`Chain` objects the regression suite above
 already exercises and validates, with no detection logic of its own to

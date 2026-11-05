@@ -932,3 +932,17 @@ entry below.
   (history-stealer's upload rows, three templated maps in
   factory_defaults) and three constant-markup assignments in `.js` files
   correctly dropped.
+- ~~Jinja2/Django `{{ value | safe }}` template output~~ — added in
+  v1.44.0, see ARCHITECTURE.md and CAPABILITIES.md. Two real LA CTF
+  challenges: 2024 "ctf-wiki" (`{{ description | safe }}` over
+  `markdown(description)`, which keeps raw HTML — the intended stored XSS)
+  and 2026 "blogler" (`{{ blog["content"]|safe }}` over mistune output).
+  Autoescaping is the default; `|safe` is the explicit opt-out, and
+  nothing in flagmap looked at template files for it. Added an
+  `"html"`-language rule matching `|safe` inside `{{ ... }}`. Also in this
+  release: `inline_script.py`'s own docstring self-matched the generic
+  `eval(` rule on its post-release self-scan — reworded. Verified:
+  240/240 regression (`jinja_safe_vuln.html`/`_clean.html`: both real
+  shapes; plain `{{ }}`, `|e`/`|urlencode`, and a filter whose name merely
+  contains "safe" as safe); per-finding corpus diff: LA CTF 173 → 175,
+  exactly the two templates; all other corpora unchanged.

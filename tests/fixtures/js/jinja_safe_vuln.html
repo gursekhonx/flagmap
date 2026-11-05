@@ -1,0 +1,4 @@
+{# Fixture for the Jinja2 |safe rule (v1.44.0). Mirrors LA CTF 2024
+   "ctf-wiki" view.html and 2026 "blogler" blog.html. #}
+<div class="ctfer-info">{{ description | safe }}</div>  // ruleid: Cross-Site Scripting (XSS)
+<article>{{ blog["content"]|safe }}</article>  // ruleid: Cross-Site Scripting (XSS)

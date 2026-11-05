@@ -509,6 +509,26 @@ RAW_PATTERNS = [
         "possible",
     ),
     (
+        # Found in two real LA CTF web challenges: 2024 "ctf-wiki"
+        # (templates/view.html, `{{ description | safe }}` where the view
+        # passes markdown(description) — Python-Markdown keeps raw HTML, so
+        # a profile description of `<script>...` runs; the intended bug)
+        # and 2026 "blogler" (templates/blog.html, `{{ blog["content"]|safe }}`
+        # over mistune-rendered user markdown). Jinja2/Django autoescape
+        # every {{ }} by default; `|safe` is the explicit opt-out, so it
+        # marks exactly the spots where escaping was turned off.
+        "Cross-Site Scripting (XSS)",
+        "html",
+        r"""\{\{[^}]*\|\s*safe\b[^}]*\}\}""",
+        "medium",
+        "A Jinja2/Django template output is marked |safe, which switches off autoescaping for this value. If "
+        "any part of it is user-controlled — including markdown rendered to HTML, which typically passes raw "
+        "<script>/<img onerror> through — this is stored or reflected XSS.",
+        "Put <img src=x onerror=alert(document.domain)> into whatever field feeds this value (markdown "
+        "renderers usually keep raw HTML).",
+        "possible",
+    ),
+    (
         "Cross-Site Scripting (XSS) — DOM-based",
         "js",
         # (v1.43.0) the lookahead used to exempt only the empty string; it
