@@ -2437,6 +2437,48 @@ attack bot generating throwaway email addresses, not a secret. Per-finding
 corpus diff: LA CTF 183 → 184, only the real line; everything else
 unchanged.
 
+**Stored XSS through an in-memory store (`store_html_xss_guard.py`,
+v1.48.0)**: two real LA CTF 2023 challenges keep user content in a `Map`
+and serve it back as HTML. "california-state-police":
+
+```js
+app.post("/report", (req, res) => {
+    const crime = req.body.crime;
+    ...
+    reports.set(id, crime);
+});
+app.get("/report/:id", (req, res) => {
+    ...
+    res.type("text/html").send(reports.get(req.params.id));
+});
+```
+
+"metaverse" is the same with `posts.set(id, content)` and
+`res.type("text/html").send(postTemplate.replace("$CONTENT", () =>
+posts.get(req.params.id)))`. Both are stored XSS against an admin bot
+(the first under a strict CSP, which is the rest of that challenge). No
+rule fired: the request read, the store write and the response are three
+statements in two handlers, and the AST taint engine's flow stops at a
+Map.
+
+Three whole-file signals: (1) a variable bound from
+`req.body/query/params`, plain (`const x = req.body.x`) or destructured
+(`const { x } = req.body`); (2) `STORE.set(<key>, <that variable, or a
+direct req.* member>)`, which marks the store; (3) a `.send(` line
+containing `STORE.get(` for a marked store, with an HTML content type
+(`res.type("text/html")`, `.type("html")`, a `Content-Type: text/html`
+header) set on that line or the three before it. Express's own default
+of text/html for string bodies is deliberately *not* assumed: `.get()`
+results are just as often objects, and 2023 "hptla" in the same archive
+does exactly that (`res.send(lists.get(id))` of an array → JSON), which
+stays quiet and is mirrored in the clean fixture.
+
+Per-finding corpus diff: LA CTF 184 → 186 — the two real lines — and
+nothing else in any corpus. The first fixture run failed both `ruleid`
+lines: the key pattern in signal (2) didn't allow a call expression
+(`reports.set(uuid(), crime)`), which the real files happened not to use
+(`id` was a variable). Loosened to one level of parentheses.
+
 `report_md.py` deliberately has no fixture category of its own: it's a
 pure renderer over `Finding`/`Chain` objects the regression suite above
 already exercises and validates, with no detection logic of its own to

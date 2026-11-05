@@ -995,3 +995,21 @@ entry below.
   as x } from 'uuid'` forms. Verified: 253/253 regression (both forms
   `ruleid`, v4 `safe`); per-finding corpus diff: LA CTF 183 → 184, the
   real line only; `patterns.py` self-scan unchanged at 8.
+- ~~Stored XSS through an in-memory Map: request data `.set()` on one
+  route, `.get()` into an HTML `.send()` on another~~ — added in v1.48.0,
+  see ARCHITECTURE.md and CAPABILITIES.md. Two real LA CTF 2023
+  challenges: "california-state-police" (`reports.set(id, crime)` with
+  `crime = req.body.crime`, then
+  `res.type("text/html").send(reports.get(req.params.id))`) and "metaverse"
+  (`posts.set(id, content)`, then the same send through a template
+  `.replace()`). The read, the store and the send are three statements in
+  different handlers, and the AST taint engine doesn't follow values
+  through a Map, so nothing fired. Added `store_html_xss_guard.py`: a
+  variable bound from `req.body/query/params` (plain or destructured) →
+  `STORE.set(key, that value)` → a `.send(` line containing `STORE.get(`
+  with an HTML content type set on it or the three lines before. Verified:
+  257/257 regression (dedicated fixtures; clean: JSON responses from a
+  request-filled store — hptla's real shape — and HTML from a store that
+  only holds constants); per-finding corpus diff: LA CTF 184 → 186,
+  exactly the two real lines; all other corpora unchanged; guard and
+  `scanner.py` self-scan clean.

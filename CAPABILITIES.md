@@ -47,6 +47,9 @@ Ruby/Rails, Lua, Rust):
   fires, added v1.20.0, inside a file with no server-route signal
   anywhere — a plain browser `fetch()` call isn't SSRF at all; see
   `ssrf_fetch_guard.py` and ARCHITECTURE.md's "Best-effort heuristics" section)
+- Stored XSS through an in-memory Map in Express (added v1.48.0, see
+  `store_html_xss_guard.py`/ARCHITECTURE.md): request data `.set()` into a
+  store on one route, `.get()` into an HTML-typed `.send()` on another
 - HTML escaping in JavaScript via `.replace("<", "&lt;")` with a string
   pattern (added v1.45.0, see ARCHITECTURE.md) — replaces only the first
   occurrence, unlike Python's `str.replace`

