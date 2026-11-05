@@ -884,3 +884,23 @@ entry below.
   (Python and JS ruleid; literal and escaped safe cases); per-finding
   corpus diff shows only DUCTF 2023 110 → 114 (two lines × `src/` and
   `publish/`); `patterns.py` self-scan unchanged at 8.
+- ~~False positives: SQL Injection reported on *tagged* template
+  literals (`sql\`...${x}\``, `db\`...${x}\``)~~ — fixed in v1.42.0, see
+  ARCHITECTURE.md. Found running the LA CTF archive (UCLA's public
+  challenge repo) — the first non-DownUnderCTF external corpus. Three real
+  challenges (2025 "arclbroth" with `secure-sqlite`, 2026
+  "bobles-and-narnes"/"narnes-and-bobles" with Bun's built-in SQL) produced
+  30 "SQL Injection" findings, every one on a tagged template like
+  `` sql`SELECT * FROM users WHERE username=${username}` ``. A tag function
+  receives the literal pieces and the interpolated values separately and
+  binds the values as parameters — these lines are the *safe* way to write
+  SQL, and none of them is the challenges' real bug (a `secure-sqlite` quirk
+  in one, Bun's array-of-objects `VALUES` expansion in the other). The JS
+  "SQL structure in a template literal" pattern now requires that the
+  opening backtick not be directly preceded by an identifier, `.`, `)` or
+  `]` — i.e. not a tag. Untagged templates (`` const q = `SELECT...${x}` ``,
+  `` db.query(`...${x}`) ``, `` sql.unsafe(`...${x}`) ``) still fire.
+  Verified: 231/231 regression (new untagged `ruleid`; `sql`/`db`/
+  `prisma.$queryRaw` tagged `safe` cases); per-finding corpus diff: LA CTF
+  195 → 165, exactly the 30 tagged-template lines removed, nothing else;
+  CyberSci and all three DUCTF archives unchanged.

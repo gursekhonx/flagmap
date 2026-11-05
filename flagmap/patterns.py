@@ -77,7 +77,18 @@ RAW_PATTERNS = [
     (
         "SQL Injection",
         "js",
-        r"""`[^`]*\b(?:SELECT\b[^`]*\bFROM|INSERT\b[^`]*\bINTO|UPDATE\b[^`]*\bSET|DELETE\b[^`]*\bFROM)\b[^`]*\$\{[\w.]+\}""",
+        # (v1.42.0) `(?<![\w$.)\]])` — the opening backtick must not be
+        # directly preceded by an identifier, `.`, `)` or `]`, i.e. this is
+        # NOT a *tagged* template. sql`...${x}` (postgres.js, Bun's SQL,
+        # secure-sqlite), db`...`, Prisma.sql`...`, prisma.$queryRaw`...`
+        # turn every ${...} into a bound parameter: the tag function gets
+        # the literal pieces and the values separately and never
+        # concatenates them. Found as 30 false positives across three real
+        # LA CTF challenges (2025 "arclbroth", 2026 "bobles-and-narnes" /
+        # "narnes-and-bobles") whose actual bugs lie elsewhere. Untagged
+        # templates — `const q = `SELECT...${x}``, db.query(`...${x}`),
+        # sql.unsafe(`...${x}`) — are unaffected.
+        r"""(?<![\w$.)\]])`[^`]*\b(?:SELECT\b[^`]*\bFROM|INSERT\b[^`]*\bINTO|UPDATE\b[^`]*\bSET|DELETE\b[^`]*\bFROM)\b[^`]*\$\{[\w.]+\}""",
         "high",
         "A template literal containing SQL structure (SELECT...FROM, INSERT...INTO, etc.) and an "
         "interpolated ${variable} is being built — catches the query at its construction site even if "

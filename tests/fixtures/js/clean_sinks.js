@@ -62,3 +62,10 @@ function sendBrowserRedirectResponseSafe(res, redirectTo) {
 
 // Escaped before use as a $regex pattern.
 const safeHits = await Files.find({ filename: { $regex: _.escapeRegExp(req.query.search) } });  // safe: NoSQL Injection
+
+// Tagged templates (postgres.js / Bun SQL / secure-sqlite / Prisma) bind
+// every ${...} as a parameter — mirrors LA CTF 2025 "arclbroth" and 2026
+// "bobles-and-narnes".
+const existing = sql`SELECT * FROM users WHERE username=${username}`;  // safe: SQL Injection
+const potentialUsers = await db`SELECT * FROM users WHERE username=${username}`;  // safe: SQL Injection
+const rows = await prisma.$queryRaw`SELECT * FROM users WHERE id=${id}`;  // safe: SQL Injection

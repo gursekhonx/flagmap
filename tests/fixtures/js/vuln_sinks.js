@@ -96,3 +96,6 @@ function sendBrowserRedirectResponse(res, redirectTo) {
 
 // Same shape in JS, with the unquoted-key spelling Mongo drivers accept.
 const hits = await Files.find({ filename: { $regex: req.query.search } });  // ruleid: NoSQL Injection
+
+// Untagged template literal building SQL — still SQL injection.
+const rawQuery = `SELECT * FROM users WHERE username=${username}`;  // ruleid: SQL Injection

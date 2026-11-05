@@ -2215,6 +2215,36 @@ per-finding corpus diff shows only DUCTF 2023 110 → 114 (lines 82–83 in
 both `src/` and `publish/`); everything else unchanged; `patterns.py`
 self-scan unchanged at 8.
 
+**Tagged-template SQL is parameterized (`patterns.py`, v1.42.0)**: the
+first fix from the LA CTF archive (`uclaacm/lactf-archive`, 2023–2026 web
+challenges, each with its source and solve script) is a precision fix, not
+a new detection. The JS rule that catches SQL structure inside any template
+literal — written to find a query at its construction site even when it's
+executed elsewhere — also fired on tagged templates:
+
+```js
+const existing = sql`SELECT * FROM users WHERE username=${username}`;   // secure-sqlite ("arclbroth")
+const sessions = await db`SELECT userid FROM sessions WHERE id=${req.cookies.session}`;  // Bun SQL ("bobles-and-narnes")
+```
+
+A tag function (`sql`, `db`, `Prisma.sql`, `prisma.$queryRaw`) receives
+the literal string pieces and the `${...}` values as separate arguments
+and binds the values as parameters; nothing is ever concatenated. Thirty
+such lines across three challenges were reported as "high"/"likely" SQL
+injection, none of them the intended bug, which drowns out the findings
+that matter in exactly the kind of file a competitor needs to read fast.
+
+The fix is a lookbehind on the opening backtick, `(?<![\w$.)\]])` — not
+directly preceded by an identifier character, `$`, `.`, `)` or `]`, which
+is what a tag (`sql`, `this.db`, `getDb()`, `clients[0]`) always ends with.
+An untagged template is preceded by `=`, `(`, `,`, whitespace or an
+operator and still matches, including the genuinely dangerous escape
+hatches `` sql.unsafe(`...${x}`) `` and `` prisma.$queryRawUnsafe(`...`) ``
+(the backtick follows `(`). Verified with the per-finding corpus diff:
+LA CTF 195 → 165, exactly those 30 lines and nothing else; CyberSci and
+DUCTF 2023/2024/2025 unchanged, so no previously-real JS SQL finding was
+lost.
+
 `report_md.py` deliberately has no fixture category of its own: it's a
 pure renderer over `Finding`/`Chain` objects the regression suite above
 already exercises and validates, with no detection logic of its own to
