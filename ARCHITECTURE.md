@@ -2479,6 +2479,22 @@ lines: the key pattern in signal (2) didn't allow a call expression
 (`reports.set(uuid(), crime)`), which the real files happened not to use
 (`id` was a variable). Loosened to one level of parentheses.
 
+**Exposed `.hg` directory (`loot.py`, v1.49.0)**: from LA CTF 2023's
+public "my-chemical-romance" challenge. The Flask app serves
+`static/`, and `static/.hg/` is a full Mercurial repository. The solve
+fetches `/.hg/dirstate` to learn the server file's name, then
+`/.hg/store/data/gerard__way2001.py.i` and decodes the revlog — or, as the
+author's "cheese" solution shows, just `hg clone https://.../` and `hg
+backout` the commit that removed the flag. `loot.py`'s presence check
+covered `.git` only. Mercurial gets the same treatment: `.hg` among a
+directory's subdirectories is the finding, with a `hg log -p` / `hg clone
+http://HOST/...` suggestion; no content inspection, same as `.git`.
+`.hg` doesn't need adding to `SKIP_DIRS` — the code walks already skip
+every dot-directory — and no existing finding came from inside one.
+Verified with a new `tests/fixtures/loot/case4/` (a `.hg` with
+`requires`/`store/fncache` under a static root) and the per-finding corpus
+diff: LA CTF 186 → 187, that one directory; nothing else changed.
+
 `report_md.py` deliberately has no fixture category of its own: it's a
 pure renderer over `Finding`/`Chain` objects the regression suite above
 already exercises and validates, with no detection logic of its own to

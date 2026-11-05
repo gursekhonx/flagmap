@@ -1013,3 +1013,15 @@ entry below.
   only holds constants); per-finding corpus diff: LA CTF 184 → 186,
   exactly the two real lines; all other corpora unchanged; guard and
   `scanner.py` self-scan clean.
+- ~~Exposed Mercurial `.hg` directory~~ — added in v1.49.0, see
+  ARCHITECTURE.md and CAPABILITIES.md. From LA CTF 2023's public
+  "my-chemical-romance" challenge, which serves `static/` with its `.hg`
+  repository inside it: the solve reads `.hg/dirstate` to learn the
+  source file's name, then dumps `.hg/store/data/gerard__way2001.py.i`
+  (or simply `hg clone`s the site and backs out the commit that removed
+  the flag). `loot.py` has flagged an exposed `.git` since its first
+  version but knew nothing about Mercurial. Added the same presence check
+  for `.hg`, with an `hg log -p` / `hg clone http://...` suggestion.
+  Verified: 258/258 regression (new `loot/case4` with a `.hg` under a
+  static root); per-finding corpus diff: LA CTF 186 → 187, the real
+  directory only; everything else unchanged; `loot.py` self-scan clean.

@@ -184,6 +184,24 @@ def _check_presence(dirpath: str, dirnames: List[str], filenames: List[str], roo
             payload="git -C '{}' log -p --all; git -C '{}' show --all".format(git_path, git_path),
         ))
 
+    # Mercurial's equivalent of .git (added v1.49.0): LA CTF 2023 "my-chemical-romance" serves its static root
+    # with the .hg directory inside it, and the deleted flag-bearing source
+    # comes back from the revlogs (`hg clone` the site, then `hg log -f` /
+    # `hg backout`, or dump .hg/store/data/<file>.i directly).
+    if ".hg" in dirnames:
+        hg_path = os.path.join(dirpath, ".hg")
+        findings.append(LootFinding(
+            file=hg_path,
+            line_no=0,
+            line_text=".hg/",
+            vuln_name="Exposed .hg directory",
+            why="A Mercurial repository's history is sitting right here (and if this directory is web-served, "
+                "anyone can clone it). Old revisions frequently hold deleted source, credentials, or the "
+                "original flag.",
+            payload="hg -R '{}' log -p; or, if it's served over HTTP: hg clone http://HOST/<path>/ out && "
+                    "hg -R out log -p".format(os.path.dirname(hg_path) or "."),
+        ))
+
     for fname in filenames:
         full = os.path.join(dirpath, fname)
         if fname in _EXACT_NAME_FINDINGS:

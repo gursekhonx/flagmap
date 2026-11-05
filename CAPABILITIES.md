@@ -419,6 +419,9 @@ source itself was handed out, not bugs in the challenge's logic:
   its own separate walk that doesn't skip it, flags its mere presence, and
   suggests `git log -p --all` / `git show --all` directly — deleted files,
   old credentials, and a pre-swap flag are all common finds this way.
+- **Exposed `.hg` directory** (added v1.49.0) — the Mercurial equivalent,
+  same presence check; suggests `hg log -p`, or `hg clone` over HTTP when
+  the directory sits under a web-served root.
 - **Exposed `.env` file**, **`.htpasswd`**, **SSH private keys**
   (`id_rsa`/`id_dsa`/`id_ecdsa`/`id_ed25519`, by exact filename) — presence
   alone is the finding.
