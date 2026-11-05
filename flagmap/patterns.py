@@ -65,12 +65,37 @@ RAW_PATTERNS = [
     (
         "SQL Injection",
         "python",
-        r"""f["'][^"']*\b(?:SELECT\b[^"']*\bFROM|INSERT\b[^"']*\bINTO|UPDATE\b[^"']*\bSET|DELETE\b[^"']*\bFROM)\b[^"']*\{[\w.]+\}""",
+        # (v1.50.0) one alternative per quote style: the old `[^"']*` couldn't
+        # cross the quotes SQL itself uses around a string value, so
+        # f"... WHERE name = '{name}'" — the most common shape of all — only
+        # matched when the execute( call was on the same line.
+        r"""f"[^"]*\b(?:SELECT\b[^"]*\bFROM|INSERT\b[^"]*\bINTO|UPDATE\b[^"]*\bSET|DELETE\b[^"]*\bFROM)\b[^"]*\{[\w.]+\}|f'[^']*\b(?:SELECT\b[^']*\bFROM|INSERT\b[^']*\bINTO|UPDATE\b[^']*\bSET|DELETE\b[^']*\bFROM)\b[^']*\{[\w.]+\}""",
         "high",
         "An f-string containing SQL structure (SELECT...FROM, INSERT...INTO, etc.) and an interpolated "
         "{variable} is being built — this catches the query at its construction site even when it's "
         "assigned to a variable and executed several lines later (e.g. `sql = f\"SELECT...{x}\"` then "
         "`conn.execute(sql)` further down), which a single-call pattern can't see across lines.",
+        "' OR 1=1 -- ",
+        "likely",
+    ),
+    (
+        # (v1.50.0) The str.format() twin of the f-string rule above. Found
+        # in LA CTF 2023's public "85-reasons-why" web challenge
+        # (app/views.py), where the query is wrapped in SQLAlchemy's text()
+        # on its own line under a line-continued execute(\ call:
+        #     res = db.session.connection().execute(\
+        #         text("select parent as PID from images where b85_image = '{}' AND ...".format(spic)))
+        # The existing `execute("...{}...".format(` rule needs execute( on
+        # the same line, so this never matched. `spic` is the uploaded
+        # image, base85-encoded with a quote-doubling filter the solve
+        # sidesteps.
+        "SQL Injection",
+        "python",
+        r""""[^"]*\b(?:SELECT\b[^"]*\bFROM|INSERT\b[^"]*\bINTO|UPDATE\b[^"]*\bSET|DELETE\b[^"]*\bFROM)\b[^"]*\{[^}]*\}[^"]*"\s*\.format\s*\(|'[^']*\b(?:SELECT\b[^']*\bFROM|INSERT\b[^']*\bINTO|UPDATE\b[^']*\bSET|DELETE\b[^']*\bFROM)\b[^']*\{[^}]*\}[^']*'\s*\.format\s*\(""",
+        "high",
+        "A string literal containing SQL structure (SELECT...FROM, INSERT...INTO, ...) with {} placeholders is "
+        "filled in with str.format() — the values are pasted into the SQL text, not bound as parameters, "
+        "wherever the query is eventually executed (including through SQLAlchemy's text()).",
         "' OR 1=1 -- ",
         "likely",
     ),

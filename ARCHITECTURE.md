@@ -2495,6 +2495,38 @@ Verified with a new `tests/fixtures/loot/case4/` (a `.hg` with
 `requires`/`store/fncache` under a static root) and the per-finding corpus
 diff: LA CTF 186 → 187, that one directory; nothing else changed.
 
+**`.format()` SQL construction, and quote-aware construction rules
+(`patterns.py`, v1.50.0)**: from LA CTF 2023's public "85-reasons-why"
+challenge (`app/views.py`):
+
+```python
+res = db.session.connection().execute(\
+    text("select parent as PID from images where b85_image = '{}' AND ((select active from posts where id=PID) = TRUE)".format(spic)))
+```
+
+`spic` is the uploaded image, base85-encoded and run through a quote-
+doubling filter that the solve's crafted bytes sidestep. The existing
+Python rules cover `execute("...".format(` on one line and an f-string
+containing SQL structure anywhere (the construction-site rule); the
+line-continued `execute(\` puts the query on a line of its own, and it's
+built with `.format()`, not an f-string — so nothing matched.
+
+The new rule is the `.format()` twin of the f-string construction-site
+rule. Testing it exposed a blind spot the two share: the original
+character class `[^"']*` (used before and after the SQL keywords) stops at
+the first quote of *either* kind, and SQL quotes its values — `"...
+WHERE b85_image = '{}' ..."` has a `'` before the placeholder. The
+f-string rule therefore never matched `f"SELECT ... WHERE name =
+'{name}'"`, the commonest way to write the bug, unless an `execute(`-
+anchored rule happened to catch the same line. Both rules now carry one
+alternative per Python quote style (`"[^"]*...` and `'[^']*...`).
+
+Per-finding corpus diff: LA CTF 187 → 189 — the real `views.py:62`, plus
+`populate_db.py:45`, an already-reported line where the f-string rule now
+matches alongside the execute-anchored one; DUCTF 2025 147 → 148, an
+f-string SQL payload inside a solve script; CyberSci and DUCTF 2023/2024
+unchanged. Fixtures in the shared Python `vuln_sinks.py`/`clean_sinks.py`.
+
 `report_md.py` deliberately has no fixture category of its own: it's a
 pure renderer over `Finding`/`Chain` objects the regression suite above
 already exercises and validates, with no detection logic of its own to

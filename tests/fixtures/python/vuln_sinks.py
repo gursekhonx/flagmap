@@ -193,3 +193,8 @@ also_leaked = Article.objects.exclude(**request.get_json())  # ruleid: ORM Injec
 # "crossedmonkes" search: the client supplies a full regex, so ^-anchored
 # guesses are a prefix oracle on the matched field.
 entries = files.find({"$or": [{'filename': {'$regex': search}}]})  # ruleid: NoSQL Injection
+
+# str.format() SQL construction off the execute( line — mirrors LA CTF
+# 2023 "85-reasons-why" (SQLAlchemy text() under a line-continued call).
+res = db.session.connection().execute(\
+    text("select parent as PID from images where b85_image = '{}' AND active".format(spic)))  # ruleid: SQL Injection

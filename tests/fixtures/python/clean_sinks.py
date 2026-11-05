@@ -124,3 +124,7 @@ chosen = Article.objects.filter(title__icontains=request.data.get("q", ""))  # s
 # $regex with a literal pattern, or with the input escaped first.
 fixed = files.find({'filename': {'$regex': '^report-'}})  # safe: NoSQL Injection
 escaped = files.find({'filename': {'$regex': re.escape(search)}})  # safe: NoSQL Injection
+
+# .format() on a non-SQL string, and a bound parameter in text().
+label = "Selected {} files from the list".format(count)  # safe: SQL Injection
+res = conn.execute(text("select * from images where b85_image = :img"), {"img": spic})  # safe: SQL Injection

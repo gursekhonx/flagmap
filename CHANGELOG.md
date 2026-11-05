@@ -1025,3 +1025,22 @@ entry below.
   Verified: 258/258 regression (new `loot/case4` with a `.hg` under a
   static root); per-finding corpus diff: LA CTF 186 → 187, the real
   directory only; everything else unchanged; `loot.py` self-scan clean.
+- ~~Python SQL built with `str.format()` away from the `execute(` line;
+  and SQL-construction rules that couldn't see past a quote~~ — added /
+  fixed in v1.50.0, see ARCHITECTURE.md. From LA CTF 2023's public
+  "85-reasons-why" challenge (`app/views.py`): `execute(\` on one line,
+  then `text("select parent as PID from images where b85_image = '{}' AND
+  ...".format(spic))` on the next. The only `.format()` SQL rule required
+  `execute(` on the same line. Added the `.format()` twin of the existing
+  "SQL structure in an f-string" construction-site rule — and while
+  testing it, found both rules shared a blind spot: `["'][^"']*` stops at
+  the first quote of either kind, so `"... WHERE x = '{}'"` (SQL quoting a
+  value inside a double-quoted Python string — the most common shape)
+  never matched unless `execute(` was on the same line. Both rules now
+  have one alternative per Python quote style. Verified: 261/261
+  regression (real shape `ruleid`; a non-SQL `.format()` and a bound
+  `text(":img")` parameter `safe`); per-finding corpus diff: LA CTF
+  187 → 189 (`views.py:62`, plus a second rule now also matching
+  `populate_db.py:45`, which was already reported); DUCTF 2025 147 → 148
+  (an f-string SQL payload in a solve script); CyberSci, DUCTF 2023/2024
+  unchanged; `patterns.py` self-scan unchanged at 8.
