@@ -59,3 +59,6 @@ function sendBrowserRedirectResponseSafe(res, redirectTo) {
   }
   res.send(`<script>window.location = "${redirectTo}";</script>`);
 }
+
+// Escaped before use as a $regex pattern.
+const safeHits = await Files.find({ filename: { $regex: _.escapeRegExp(req.query.search) } });  // safe: NoSQL Injection

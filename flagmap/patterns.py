@@ -722,6 +722,34 @@ RAW_PATTERNS = [
         '{"username": {"$ne": null}, "password": {"$ne": null}}',
         "likely",
     ),
+    (
+        # Found in DownUnderCTF 2023's public "crossedmonkes" web challenge
+        # (monkestorage/main.py, get_entries()):
+        #     '$or': [
+        #         {'filename': {'$regex': search}},
+        #         {'search_id': {'$regex': search}}
+        #     ]
+        # where `search` is the `?search=` query parameter (passed in from
+        # the view one function away, so no same-line request object).
+        # The value is a full regex, not a substring: `^6`, `^6a`, ...
+        # against `search_id` (an unpublished file's ObjectId) is a
+        # prefix oracle, and the view's `?redirect_to=` branch turns
+        # "matched / didn't match" into a cross-site observable — the
+        # XS-leak the intended solution uses to recover the ObjectId.
+        # Escaping the input first (re.escape / escapeRegExp) or matching
+        # a literal is the fix, so those, and literal patterns, are excluded.
+        "NoSQL Injection",
+        "generic",
+        r"""(?:['"]\$regex['"]|(?<![\w$])\$regex)\s*:\s*(?!(?:re\.)?escape\s*\(|_?\.?escapeRegExp\s*\(|escapeRegex\w*\s*\()[A-Za-z_]""",
+        "medium",
+        "A MongoDB $regex operator's pattern is a variable rather than a literal or an escaped value. If any part "
+        "of it comes from the request, the client controls a full regular expression: anchored prefixes "
+        "(^a, ^ab, ...) become a character-by-character oracle on the matched field, and a catastrophic "
+        "pattern is a ReDoS.",
+        "Send ^<guess> and extend it one character at a time, watching for a difference in the response "
+        "(result count, redirect vs 404, timing).",
+        "possible",
+    ),
 
     # ---------------- MASS ASSIGNMENT ----------------
     (

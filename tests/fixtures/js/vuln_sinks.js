@@ -93,3 +93,6 @@ function sendBrowserRedirectResponse(res, redirectTo) {
   }
   res.send(`<script>window.location = "${redirectTo}";</script>`);
 }
+
+// Same shape in JS, with the unquoted-key spelling Mongo drivers accept.
+const hits = await Files.find({ filename: { $regex: req.query.search } });  // ruleid: NoSQL Injection

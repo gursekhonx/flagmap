@@ -188,3 +188,8 @@ leaked = Article.objects.filter(**request.data)  # ruleid: ORM Injection / Filte
 user = User(**request.form)  # ruleid: Mass Assignment
 item = Item(**request.get_json())  # ruleid: Mass Assignment
 also_leaked = Article.objects.exclude(**request.get_json())  # ruleid: ORM Injection / Filter Leak
+
+# MongoDB $regex fed a variable — mirrors DownUnderCTF 2023's real
+# "crossedmonkes" search: the client supplies a full regex, so ^-anchored
+# guesses are a prefix oracle on the matched field.
+entries = files.find({"$or": [{'filename': {'$regex': search}}]})  # ruleid: NoSQL Injection

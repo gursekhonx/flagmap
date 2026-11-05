@@ -871,3 +871,16 @@ entry below.
   4.12.4 quiet), 222/222 regression; per-finding corpus diff shows only
   DUCTF 2023 106 → 110 (`package-lock.json` and `yarn.lock` in `src/`
   and `publish/`); `deps.py` self-scan unchanged at its pre-existing 2.
+- ~~MongoDB `$regex` operator fed a variable~~ — added in v1.41.0, see
+  ARCHITECTURE.md and CAPABILITIES.md. From DownUnderCTF 2023's public
+  "crossedmonkes" challenge: `{'search_id': {'$regex': search}}` with
+  `search` from `?search=`, one function away. A client-supplied regex
+  is a prefix oracle on the field (`^6`, `^6a`, ...), and the view's
+  `?redirect_to=` branch makes match/no-match observable cross-site —
+  the intended XS-leak. Existing NoSQL rules only covered a whole request
+  body used as the filter. Added a single-line `"generic"` rule: a
+  quoted or bare `$regex` key whose value is an identifier, excluding
+  `re.escape(...)`/`escapeRegExp(...)`. Verified: 227/227 regression
+  (Python and JS ruleid; literal and escaped safe cases); per-finding
+  corpus diff shows only DUCTF 2023 110 → 114 (two lines × `src/` and
+  `publish/`); `patterns.py` self-scan unchanged at 8.

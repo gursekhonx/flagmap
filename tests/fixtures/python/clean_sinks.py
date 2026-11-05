@@ -120,3 +120,7 @@ aiohttp_app.add_routes([web.static('/files', './files', follow_symlinks=False)])
 # client can't pick a relation or an operator. And a Mass Assignment-style
 # constructor unpack is still Mass Assignment, not an ORM lookup leak.
 chosen = Article.objects.filter(title__icontains=request.data.get("q", ""))  # safe: ORM Injection / Filter Leak
+
+# $regex with a literal pattern, or with the input escaped first.
+fixed = files.find({'filename': {'$regex': '^report-'}})  # safe: NoSQL Injection
+escaped = files.find({'filename': {'$regex': re.escape(search)}})  # safe: NoSQL Injection

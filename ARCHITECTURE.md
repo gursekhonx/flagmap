@@ -2177,6 +2177,44 @@ DUCTF 2023 106 → 110, the plugin in `package-lock.json` and `yarn.lock`
 in both `src/` and `publish/`; every other corpus unchanged. `deps.py`
 self-scan unchanged at its pre-existing 2.
 
+**MongoDB `$regex` fed a variable (`patterns.py`, v1.41.0)**: from
+DownUnderCTF 2023's public "crossedmonkes" challenge
+(`monkestorage/main.py`):
+
+```python
+return files_collection.find({
+    'share_key': share_key, 'published': published,
+    '$or': [
+        {'filename': {'$regex': search}},
+        {'search_id': {'$regex': search}}
+    ]
+})
+```
+
+`search` is the `?search=` query parameter, handed in from the view one
+function away. It's a full regular expression, not a substring:
+`^6`, `^6a`, ... against `search_id` (an upload's ObjectId) is a prefix
+oracle, and the view's `?redirect_to=True` branch turns match/no-match
+into a redirect vs a 404 — observable cross-site, which is the XS-leak
+the intended solution uses (via CSRF) to recover an ObjectId and reach an
+unsanitized SVG. The existing NoSQL rules only cover a whole request
+body used as the filter.
+
+Single-line `"generic"` rule under "NoSQL Injection": a `$regex` key —
+quoted (Python dicts, JSON-style JS, Go `bson.M`) or bare (JS object
+literals) — whose value starts with an identifier, excluding the two
+fixes (`re.escape(...)`, `escapeRegExp(...)`/`_.escapeRegExp(...)`).
+Literal patterns start with a quote or `/` and never match. No
+same-line request object is required, deliberately: in the real file
+the request value arrives as a function parameter, and a `$regex` built
+from a variable at all is the thing worth a look. "medium"/"possible".
+
+Verified: 227/227 regression (Python quoted-key and JS bare-key
+`ruleid` cases; literal, `re.escape` and `_.escapeRegExp` `safe` cases);
+per-finding corpus diff shows only DUCTF 2023 110 → 114 (lines 82–83 in
+both `src/` and `publish/`); everything else unchanged; `patterns.py`
+self-scan unchanged at 8.
+
 `report_md.py` deliberately has no fixture category of its own: it's a
 pure renderer over `Finding`/`Chain` objects the regression suite above
 already exercises and validates, with no detection logic of its own to

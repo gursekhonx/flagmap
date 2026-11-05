@@ -90,7 +90,9 @@ Ruby/Rails, Lua, Rust):
   execute as code if the validated value reaches a navigation sink like
   `window.location = ...` — script execution, not just a redirect)
 - NoSQL Injection (MongoDB `find()`/`update()` with the whole filter taken
-  from the request body)
+  from the request body; and — added v1.41.0, see ARCHITECTURE.md, any
+  language — a `$regex` operator whose pattern is an unescaped variable,
+  a prefix oracle / ReDoS if it carries request data)
 - Mass Assignment (`**request.json` into a constructor, `findByIdAndUpdate`
   with the raw request body; and — added v1.38.0, see
   `token_mass_assign_guard.py`/ARCHITECTURE.md, Python — the whole request
