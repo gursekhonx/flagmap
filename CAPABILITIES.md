@@ -97,6 +97,12 @@ Ruby/Rails, Lua, Rust):
   form/JSON dict, directly or via a variable, passed as the payload of a
   token-minting call like `jwt.encode(...)`/`create_token(...)`, so every
   submitted field becomes a signed claim)
+- ORM Injection / Filter Leak (added v1.39.0, see ARCHITECTURE.md,
+  Python: a whole request dict unpacked into an ORM lookup —
+  `Model.objects.filter(**request.data)`, `.exclude/.get(**...)`,
+  SQLAlchemy `filter_by(**...)` — so the client picks lookup keys and can
+  traverse relations, e.g. `created_by__password__startswith`, as a
+  boolean oracle on fields the API never returns)
 - Prototype Pollution (`_.merge`/`deepmerge` into `{}` from request data;
   and — added v1.29.0, see `class_pollution_guard.py`/ARCHITECTURE.md —
   Python's version of the same bug, sometimes called "class pollution": a

@@ -115,3 +115,8 @@ greeting_template = "hello there, friend"  # safe: Hardcoded Secret in Source
 # resolved path is checked against the static root, so no finding.
 aiohttp_app.add_routes([web.static('/files', './files')])  # safe: Path Traversal / LFI
 aiohttp_app.add_routes([web.static('/files', './files', follow_symlinks=False)])  # safe: Path Traversal / LFI
+
+# Lookup keys chosen by the code, only the value from the request — the
+# client can't pick a relation or an operator. And a Mass Assignment-style
+# constructor unpack is still Mass Assignment, not an ORM lookup leak.
+chosen = Article.objects.filter(title__icontains=request.data.get("q", ""))  # safe: ORM Injection / Filter Leak

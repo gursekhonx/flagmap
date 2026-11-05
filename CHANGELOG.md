@@ -836,3 +836,23 @@ entry below.
   built from chosen fields; a whole-request dict only stored in a DB);
   per-finding corpus diff shows only DUCTF 2023 103 → 104, the real line;
   guard and `scanner.py` self-scan clean.
+- ~~ORM lookup injection: a whole request dict unpacked into
+  `.filter()`~~ — added in v1.39.0, see ARCHITECTURE.md and
+  CAPABILITIES.md. From DownUnderCTF 2023's public "secureblog" DRF view:
+  `Article.objects.filter(**request.data)`. The client picks the lookup
+  keys, and `created_by__password__startswith` turns the endpoint into a
+  character-by-character oracle on the author's password hash (the
+  challenge's `pass_leak.py`). New single-line Python rule under a new
+  name, "ORM Injection / Filter Leak" (not a write, so not Mass
+  Assignment; parameterized SQL, so not SQL Injection), covering
+  `filter/exclude/get/filter_by` with DRF/Flask/Django whole-request
+  dicts. The existing Python Mass Assignment pattern now steps aside on
+  ORM lookup lines so one line isn't reported under both names — and
+  while testing that, found and fixed a pre-existing bug in it: a
+  trailing `\b` after the alternation meant its `get_json()` branch could
+  never match (no word boundary between two `)`), so
+  `Model(**request.get_json())` was silently missed. Verified: 221/221
+  regression (new ruleid cases for both rules via `get_json()`, safe case
+  for code-chosen lookup keys); per-finding corpus diff shows only DUCTF
+  2023 104 → 106, the real line in `src/` and `publish/`; all other
+  corpora unchanged; `patterns.py` self-scan unchanged at 8.

@@ -727,12 +727,49 @@ RAW_PATTERNS = [
     (
         "Mass Assignment",
         "python",
-        r"""\*\*request\.(?:json|get_json\(\)|form)\b""",
+        # (v1.39.0) the leading lookahead hands an ORM *lookup* call —
+        # `.filter(**request.form)` and friends — to the "ORM Injection /
+        # Filter Leak" rule right below instead: that's a read-side data
+        # leak through relation traversal, not a write of extra fields.
+        # Same commit: the trailing \b used to sit after the whole
+        # alternation, so the `get_json()` branch could never match
+        # (there's no word boundary between ")" and the next ")") —
+        # `Model(**request.get_json())` was silently missed. The \b now
+        # applies only to the bare-word branches.
+        r"""^(?!.*\.(?:filter|exclude|get|filter_by)\s*\(\s*\*\*\s*request\.).*\*\*request\.(?:json\b|get_json\(\)|form\b)""",
         "medium",
         "Request data is unpacked directly into a model/object constructor or update call — an attacker can "
         "set fields that were never meant to be user-editable (e.g. is_admin, role, balance).",
         "Add an unexpected field to the JSON body, e.g. {\"is_admin\": true}, and see if it's accepted.",
         "possible",
+    ),
+    (
+        # Found in DownUnderCTF 2023's public "secureblog" web challenge
+        # (djangoapp/app/views/article.py, a DRF APIView):
+        #     articles = Article.objects.filter(**request.data)
+        # Every key in the JSON body becomes a Django lookup, and lookups
+        # can traverse relations and apply operators — so
+        # {"created_by__password__startswith": "pbkdf2_sha256$600000$a"}
+        # turns "does any article match?" into a character-by-character
+        # oracle on the author's password hash, even though the serializer
+        # never returns that field. The challenge's own pass_leak.py does
+        # exactly this, then cracks the hash. Not a write, so not Mass
+        # Assignment (whose Python rule above now steps aside for this
+        # shape); not raw SQL, so not SQL Injection either — the query
+        # stays parameterized, it's the query's *structure* the client
+        # controls. Matches Django's filter/exclude/get and SQLAlchemy's
+        # filter_by, fed any whole-request dict (DRF's request.data,
+        # Flask's json/form/args/values, Django's GET/POST/query_params).
+        "ORM Injection / Filter Leak",
+        "python",
+        r"""\.(?:filter|exclude|get|filter_by)\s*\(\s*\*\*\s*request\.(?:(?:data|json|form|args|values|GET|POST|query_params)\b|get_json\(\))""",
+        "high",
+        "A whole request dict is unpacked into an ORM lookup call, so the client chooses the lookup KEYS, not "
+        "just values. Django lookups can traverse relations and use operators, turning the query into a "
+        "boolean oracle on fields the API never returns (e.g. a related user's password hash).",
+        "{\"created_by__password__startswith\": \"pbkdf2_sha256$\"} — then extend the prefix one character at a "
+        "time, keeping whichever guess still returns results.",
+        "likely",
     ),
     (
         "Mass Assignment",

@@ -180,3 +180,11 @@ app.config["SECRET_KEY"] = "another-hardcoded-signing-key-value"  # safe: Hardco
 # 2023's real "static-file-server" challenge verbatim (CVE-2024-23334 on
 # aiohttp < 3.9.2: the in-root check is skipped entirely).
 aiohttp_app.add_routes([web.static('/files', './files', follow_symlinks=True)])  # ruleid: Path Traversal / LFI
+
+# Django ORM lookup injection — mirrors DownUnderCTF 2023's real
+# "secureblog" DRF view: the client chooses the lookup keys, so
+# created_by__password__startswith becomes a password-hash oracle.
+leaked = Article.objects.filter(**request.data)  # ruleid: ORM Injection / Filter Leak
+user = User(**request.form)  # ruleid: Mass Assignment
+item = Item(**request.get_json())  # ruleid: Mass Assignment
+also_leaked = Article.objects.exclude(**request.get_json())  # ruleid: ORM Injection / Filter Leak

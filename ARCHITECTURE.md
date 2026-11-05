@@ -2098,6 +2098,55 @@ per-finding corpus diff shows only DUCTF 2023 103 → 104
 Known blind spots: no cross-file tracking, minting helpers not named
 with "token"/"jwt", and `session.update(request.form)`-style sessions.
 
+**ORM lookup injection (`patterns.py`, v1.39.0)**: from DownUnderCTF
+2023's public "secureblog" challenge — a Django REST Framework view:
+
+```python
+def post(self, request: Request, format=None):
+    articles = Article.objects.filter(**request.data)
+    serializer = ArticleSerializer(articles, many=True)
+    return Response(serializer.data)
+```
+
+The serializer only returns `title`/`body`/`author`, but the client
+chooses the *keys* of the filter, and Django lookups traverse relations
+and take operators. `{"created_by__password__startswith":
+"pbkdf2_sha256$600000$a"}` returns articles or doesn't, so the
+challenge's `pass_leak.py` reads the author's password hash one
+character at a time, cracks it, and logs into the admin (reached via an
+nginx-vs-`re_path` routing mismatch, the second half of the chain, which
+lives in config and stays out of scope here). flagmap reported nothing:
+the Python Mass Assignment pattern only covered `json`/`form`, not DRF's
+`request.data` — and it would have been the wrong name anyway, since
+nothing is written.
+
+New single-line Python rule, new vuln name "ORM Injection / Filter
+Leak" (neither "Mass Assignment", a write, nor "SQL Injection" — the SQL
+stays parameterized, it's the query's structure the client controls):
+`.filter/.exclude/.get/.filter_by(**request.<whole-dict>)` for DRF
+`data`, Flask `json/get_json()/form/args/values`, Django
+`GET/POST/query_params`. "high"/"likely".
+
+Two adjustments to the existing Python Mass Assignment pattern in the
+same commit. First, a leading lookahead so it steps aside on ORM lookup
+lines (`Article.objects.filter(**request.form)` would otherwise be
+reported under both names). Second, a pre-existing bug found while
+testing that lookahead: the trailing `\b` sat after the whole
+`(?:json|get_json\(\)|form)` alternation, and there's no word boundary
+between the `)` of `get_json()` and whatever `)` follows it — so the
+`get_json()` branch could never match and `Model(**request.get_json())`
+was silently missed. The `\b` now applies only to the bare-word branches,
+and the new rule is written the same way from the start. Fixtures cover
+both: `Item(**request.get_json())` (Mass Assignment) and
+`.exclude(**request.get_json())` (ORM Injection) are `ruleid`, and a
+filter with code-chosen keys and only a request *value* is `safe`.
+
+Verified: 221/221 regression; per-finding corpus diff shows only DUCTF
+2023 104 → 106 ("secureblog" `views/article.py:24` in both its `src/`
+and `publish/` copies). CyberSci, DUCTF 2024 and 2025 unchanged — the
+`get_json()` fix added nothing in any corpus, it only closes the gap in
+principle. `patterns.py` self-scan unchanged at 8.
+
 `report_md.py` deliberately has no fixture category of its own: it's a
 pure renderer over `Finding`/`Chain` objects the regression suite above
 already exercises and validates, with no detection logic of its own to
