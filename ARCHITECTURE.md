@@ -2527,6 +2527,57 @@ matches alongside the execute-anchored one; DUCTF 2025 147 → 148, an
 f-string SQL payload inside a solve script; CyberSci and DUCTF 2023/2024
 unchanged. Fixtures in the shared Python `vuln_sinks.py`/`clean_sinks.py`.
 
+**JS destructuring taint, and `page.setContent()` as an SSRF sink
+(`ast_engine.py`, v1.51.0)**: from LA CTF 2026's public
+"lactf-invoice-generator" challenge (`invoice-generator/server.js`):
+
+```js
+const { name, item, cost, datePurchased } = req.body;
+const invoiceHTML = generateInvoiceHTML(name, item, parseFloat(cost), datePurchased);
+...
+await page.setContent(invoiceHTML, { waitUntil: "load" });
+const pdf = await page.pdf({ format: "A4", ... });
+```
+
+`generateInvoiceHTML` drops the fields into a template-literal page, and
+puppeteer renders it in a Chromium running on the server — so an
+`<iframe src="http://flag:8081/flag">` in `name` is fetched from inside the
+compose network, where the flag service lives, and ends up in the PDF.
+
+Two separate gaps. First, `setContent` simply wasn't a JS sink; it is
+now, as "SSRF (Server-Side Request Forgery)", the code-level counterpart
+of the gotenberg `deps.py` entry (v1.30.0) — an HTML-to-PDF renderer is a
+built-in SSRF primitive. Second, and broader: even with that sink, nothing
+fired, because the AST engine's assignment step only propagated taint to a
+plain identifier on the left-hand side. `const { name } = req.body` has an
+`object_pattern` there, so `name` and every other destructured field
+started out clean — and destructuring is the ordinary way modern Express
+code reads a request. A probe confirmed it wasn't specific to this sink:
+`const { cmd } = req.body; exec(cmd);` reported nothing, while
+`const cmd = req.body.cmd; exec(cmd);` did.
+
+`_js_pattern_bindings()` now collects every name a pattern binds —
+shorthand (`{ a }`), renamed (`{ a: b }` binds `b`, not the key `a`),
+defaulted (tree-sitter's `object_assignment_pattern` for `{ a = 1 }`, and
+`assignment_pattern` in arrays), rest (`...rest`), arrays, nested — and
+the assignment step taints all of them when the right side is a taint
+source (or clears them when it's a sanitizer, mirroring the identifier
+case). The first fixture run missed `{ cmd = "ls" }` because the
+object-pattern default is a distinct node type from the array one; added.
+
+Two self-scan catches: the first version added the names with the set's
+bulk-add method, whose name `idor.py` treats as a row-lookup call, inside
+a function that already quotes a `$_GET['id']` example in a comment —
+together, a self-reported IDOR. Rewritten as a loop, and the explanatory
+comment reworded so it doesn't spell the method name either.
+
+Per-finding corpus diff: LA CTF 189 → 190, only the real `setContent`
+line. The destructuring change surfaced nothing else in any corpus —
+reassuring for precision, and a sign that in these challenges the
+destructured-request shape was mostly feeding sinks other rules already
+cover by regex. Fixtures added to the shared JS `vuln_sinks.js`/
+`clean_sinks.js`.
+
 `report_md.py` deliberately has no fixture category of its own: it's a
 pure renderer over `Finding`/`Chain` objects the regression suite above
 already exercises and validates, with no detection logic of its own to

@@ -42,7 +42,11 @@ Ruby/Rails, Lua, Rust):
 - Server-Side Template Injection / SSTI (`render_template_string`, EJS,
   Handlebars, Nunjucks)
 - SSRF (`requests`/`urlopen`/`pycurl` in Python, `axios`/`fetch`/`http.get` in
-  Node, `curl_setopt`/`file_get_contents` in PHP, fed from request data.
+  Node, `curl_setopt`/`file_get_contents` in PHP, fed from request data;
+  plus, v1.51.0, puppeteer/playwright `page.setContent(html)` rendering
+  request-built HTML in a server-side browser. Also v1.51.0: JS request
+  fields read by destructuring — `const { a, b: c } = req.body` — are
+  tainted for every AST-tracked JS sink, not just plain assignments.
   The coarse, taint-blind `fetch(var, ...)`-style JS backstop no longer
   fires, added v1.20.0, inside a file with no server-route signal
   anywhere — a plain browser `fetch()` call isn't SSRF at all; see

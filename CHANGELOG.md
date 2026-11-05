@@ -1044,3 +1044,26 @@ entry below.
   `populate_db.py:45`, which was already reported); DUCTF 2025 147 → 148
   (an f-string SQL payload in a solve script); CyberSci, DUCTF 2023/2024
   unchanged; `patterns.py` self-scan unchanged at 8.
+- ~~JS destructured request fields were never tainted; and server-side
+  headless-browser `page.setContent(html)` wasn't a sink~~ — added in
+  v1.51.0, see ARCHITECTURE.md and CAPABILITIES.md. From LA CTF 2026's
+  public "lactf-invoice-generator" challenge: `const { name, item, cost,
+  datePurchased } = req.body;` → `generateInvoiceHTML(name, ...)` (a
+  template-literal page) → `await page.setContent(invoiceHTML)` in
+  puppeteer → `page.pdf()`. Markup in `name` (an `<iframe>` pointing at
+  the internal flag service) is fetched by the server's own Chromium.
+  Two gaps: the AST engine only tainted a plain identifier on the left of
+  an assignment, so every name bound by destructuring `= req.body` — the
+  usual way modern Express reads a body — started clean; and
+  `setContent` wasn't a JS sink. Both fixed: destructuring patterns
+  (object/array, renamed `{ a: b }`, defaults `{ a = 1 }`, rest, nested)
+  now taint every bound name, and `setContent` is an "SSRF" sink in the
+  same family as the v1.30.0 gotenberg entry. Two self-scan catches along
+  the way: the new code first used the set's bulk-add method, whose name
+  flagmap's IDOR heuristic reads as a row lookup, in a function that
+  already quotes a PHP id-parameter example — together they self-flagged;
+  rewritten as a loop and the comment reworded. Verified: 265/265
+  regression (new destructured `exec`/`setContent` `ruleid`s; destructuring
+  from non-request objects `safe`); per-finding corpus diff: LA CTF 189 →
+  190, the real line only — the destructuring fix surfaced nothing else in
+  any corpus; `ast_engine.py` self-scan clean.

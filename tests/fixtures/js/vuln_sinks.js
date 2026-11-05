@@ -111,3 +111,14 @@ function htmlEscape(s) {
 // Time-based v1 UUIDs as session ids — mirrors LA CTF 2023 "uuid-hell".
 const sessionId = uuid.v1({ node: [0x67, 0x69, 0x6e, 0x6b, 0x6f, 0x69], clockseq: 0x2a64 });  // ruleid: Insecure Randomness
 const { v1: makeId } = require('uuid');  // ruleid: Insecure Randomness
+
+// Destructured request fields are tainted too (v1.51.0) — mirrors LA CTF
+// 2026 "lactf-invoice-generator": request fields -> HTML -> rendered by a
+// server-side headless browser, which then fetches whatever it references.
+app.post("/generate-invoice", async (req, res) => {
+  const { name, item: lineItem } = req.body;
+  const invoiceHTML = buildInvoice(name, lineItem);
+  await page.setContent(invoiceHTML, { waitUntil: "load" });  // ruleid: SSRF (Server-Side Request Forgery)
+  const { cmd = "ls" } = req.query;
+  exec(cmd);  // ruleid: Command Injection
+});

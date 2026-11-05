@@ -80,3 +80,12 @@ function htmlEscapeSafe(s) {
 // Random (v4) UUIDs.
 const { v4: uuid4 } = require('uuid');  // safe: Insecure Randomness
 const reqId = uuid.v4();  // safe: Insecure Randomness
+
+// Destructuring from a non-request object stays untainted, and a fixed
+// page passed to setContent() is not an SSRF.
+app.post("/render", async (req, res) => {
+  const { template } = config;
+  await page.setContent(template);  // safe: SSRF (Server-Side Request Forgery)
+  const { tool } = defaults;
+  exec(tool);  // safe: Command Injection
+});

@@ -394,6 +394,17 @@ SINKS = {
         # plain object/Map access) to add as a global sink; the regex
         # layer already covers those same-line and bare-variable.
         "fetch": ("SSRF (Server-Side Request Forgery)", "arg0", "tainted"),
+        # (v1.51.0) Headless-browser HTML rendering on the server —
+        # puppeteer/playwright page.setContent(html). Found in LA CTF 2026's
+        # public "lactf-invoice-generator" web challenge (server.js):
+        # req.body fields go through generateInvoiceHTML(...) into a
+        # template-literal page, which page.setContent() renders inside a
+        # Chromium on the server's network before page.pdf(). Any markup
+        # the user injects (<iframe src="http://flag:8081/flag">) is
+        # fetched FROM the server — the challenge's internal flag service
+        # is only reachable that way. Same family as the gotenberg deps
+        # entry (v1.30.0): an HTML-to-PDF renderer is a built-in SSRF.
+        "setContent": ("SSRF (Server-Side Request Forgery)", "arg0", "tainted"),
     },
     "php": {
         "query": ("SQL Injection", "arg0", "tainted"),
@@ -1183,6 +1194,29 @@ def _enter_scope(func_node, language, ctx: _Ctx, route_decorated: bool) -> _Scop
     return nested
 
 
+def _js_pattern_bindings(node) -> set:
+    """Every variable name a JS destructuring pattern binds:
+    `{ a, b: c, d = 1, ...rest }` -> {a, c, d, rest}; arrays and nesting
+    recurse. Property KEYS (`b` in `b: c`) and default-value expressions
+    are not bindings and are skipped."""
+    names = set()
+    t = node.type
+    if t in ("identifier", "shorthand_property_identifier_pattern"):
+        names.add(_text(node))
+    elif t == "pair_pattern":
+        value = node.child_by_field_name("value")
+        if value is not None:
+            names |= _js_pattern_bindings(value)
+    elif t in ("assignment_pattern", "object_assignment_pattern"):
+        left = node.child_by_field_name("left")
+        if left is not None:
+            names |= _js_pattern_bindings(left)
+    elif t in ("object_pattern", "array_pattern", "rest_pattern"):
+        for c in node.named_children:
+            names |= _js_pattern_bindings(c)
+    return names
+
+
 def _walk(node, language, state: _ScopeState, ctx: _Ctx):
     t = node.type
     findings = ctx.findings
@@ -1219,6 +1253,25 @@ def _walk(node, language, state: _ScopeState, ctx: _Ctx):
                 state.tainted.add(name)
             if language == "python" and t == "augmented_assignment":
                 state.built.add(name)
+        elif (language == "js" and lhs is not None and rhs is not None
+              and lhs.type in ("object_pattern", "array_pattern")):
+            # (v1.51.0) Destructuring: `const { name, item } = req.body;`
+            # binds every name in the pattern from a tainted source, but the
+            # identifier-only check above never looked inside a pattern, so
+            # none of them were tainted. Found via LA CTF 2026
+            # "lactf-invoice-generator", whose request fields only ever
+            # arrive this way; it's the most common way modern Express code
+            # reads a request body.
+            if _is_sanitizer_expr(rhs, language):
+                for bound in _js_pattern_bindings(lhs):
+                    state.tainted.discard(bound)
+            elif _matched_taint_source(rhs, state.tainted, language):
+                # (one .add() per name rather than the set's bulk-add method,
+                # whose name flagmap's own IDOR heuristic reads as a row
+                # lookup — and this function already quotes a PHP id-param
+                # example above, so the two together would self-flag.)
+                for bound in _js_pattern_bindings(lhs):
+                    state.tainted.add(bound)
         if rhs is not None:
             _walk(rhs, language, state, ctx)
         return
