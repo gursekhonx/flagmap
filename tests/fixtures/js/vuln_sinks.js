@@ -66,3 +66,15 @@ function renderUserBio(bio) {
   // tests/fixtures/js/jquery.fake-plugin.min.js for the suppressed case.
   document.getElementById("bio").innerHTML = bio;  // ruleid: Cross-Site Scripting (XSS) — DOM-based
 }
+
+// Mirrors DownUnderCTF 2024's real "i-am-confusion" web challenge
+// (src/main-app/server.js) almost verbatim: signs with RS256 only, but
+// verifies with an allowlist that also accepts HS256 against the same
+// public-key variable — the classic JWT "algorithm confusion" attack,
+// since an RSA public key isn't secret and can be replayed as an HMAC key.
+const verifyAlg = { algorithms: ['HS256','RS256'] };  // ruleid: JWT / Auth Token Weakness
+app.get("/admin.html", (req, res) => {
+  jwt.verify(req.cookies['auth'], publicKey, verifyAlg, (err, decoded) => {
+    if (!err && decoded['user'] == 'admin') res.sendFile("admin.html");
+  });
+});

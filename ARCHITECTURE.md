@@ -1613,6 +1613,80 @@ archive pins a tracked image). Re-scanning the real `hah-got-em`
 challenge now reports `gotenberg/gotenberg@8.0.3` alongside (not
 instead of) the pre-existing root-user misconfig finding.
 
+**JWT "algorithm confusion" (`patterns.py`, v1.31.0)**: from
+DownUnderCTF 2024's public "i-am-confusion" web challenge
+(`src/main-app/server.js`):
+
+```js
+const verifyAlg = { algorithms: ['HS256','RS256'] }
+const signAlg = { algorithm:'RS256' }
+...
+jwt.verify(cookie['auth'], publicKey, verifyAlg, (err, decoded_jwt) => { ... })
+```
+
+The app signs every token with RS256 only, but the verify allowlist
+accepts HS256 too, against the same `publicKey` variable. An RSA
+public key isn't secret, so an attacker fetches it (TLS handshake, or
+any endpoint that leaks it) and re-signs a forged `{"user":"admin"}`
+token with alg:HS256 using the public key's own PEM bytes as the HMAC
+secret — `jwt.verify()` has no way to tell "this key was only ever
+meant for RS256" from a single call with a mixed allowlist, so the
+forgery passes. Exactly the attack the challenge's own writeup walks
+through.
+
+`patterns.py` already had a `"generic"` JWT rule for a verify call with
+the algorithms allowlist missing *entirely*
+(`jwt\.verify\s*\(\s*\w+\s*,\s*\w+\s*\)`, "low"/"possible" — its own
+comment already names this exact attack by name as the risk) — but
+nothing for the allowlist being *present* and simply wrong, which is
+both what the real challenge does and the more common real-world shape
+in practice: a team that bothers writing an explicit allowlist at all
+tends to get the *contents* wrong, not omit it. Added a second
+`"generic"` single-line pattern matching an `algorithms` list literal —
+one regex alternative per ordering, so either family can come first —
+containing at least one HS256/384/512 entry together with at least one
+RS/ES/PS 256/384/512 entry:
+
+```
+algorithms\s*[:=]\s*\[[^\]]*\bHS(?:256|384|512)\b[^\]]*\b(?:RS|ES|PS)(?:256|384|512)\b[^\]]*\]
+```
+
+(plus the mirror-image ordering as a second alternative). The
+`[:=]` covers both the JS object-property spelling and Python/PyJWT's
+keyword-arg spelling with one pattern, consistent with how other
+`"generic"` entries in this file already work language-independently.
+Deliberately does not also try to confirm the verify key itself is a
+public/certificate value on the same line: once an allowlist mixes both
+families at all, there is no key that is simultaneously a safe HMAC
+secret and a legitimate asymmetric public key, so the mixed-family
+shape alone is the signal — filed as "high"/"likely" rather than the
+existing missing-allowlist rule's "low"/"possible", since every major
+JWT library's own documentation calls this specific combination out as
+unsafe, not merely worth a second look.
+
+Verified against both corpora. CyberSci: finding count and its 13
+pre-existing JWT hits both unchanged — confirmed by diffing against the
+version with this change stashed — because none of that archive's JWT
+findings mix algorithm families (e.g. `voter_registry.py`'s
+`algorithms=["HS256"]` is single-family, so the new pattern correctly
+leaves it alone). DownUnderCTF 2024+2025: total goes from 90 to 92,
+exactly the two real hits (`i-am-confusion`'s `src/` and `publish/`
+copies of the same `server.js`), zero false positives anywhere else.
+Self-scanning `patterns.py` itself shows the same single, pre-existing,
+unrelated self-match as before this change (a different JWT rule's own
+`why` text contains the literal substring `verify=False`) — confirmed
+via the same stash-diff that this change added no new self-match.
+
+No dedicated regression-fixture coverage existed yet for any JS JWT
+rule in this file, including the pre-existing ones (`jwtDecode`,
+`token.split('.')`, the missing-allowlist case) — only
+`tests/fixtures/python/vuln_sinks.py` had JWT cases at all. Added
+`tests/fixtures/js/vuln_sinks.js`/`clean_sinks.js` cases for this new
+rule specifically: a mixed-family allowlist mirroring the real
+challenge's exact shape (`ruleid`), plus two single-family negatives
+(`['RS256']` alone, `["HS256", "HS512"]` alone) proving the rule needs
+both families present, not just any `algorithms` array at all.
+
 `report_md.py` deliberately has no fixture category of its own: it's a
 pure renderer over `Finding`/`Chain` objects the regression suite above
 already exercises and validates, with no detection logic of its own to

@@ -38,3 +38,10 @@ app.get("/read_safe", (req, res) => {
   p = parseInt(p);
   res.send(fs.readFileSync(p));  // safe: Path Traversal / LFI
 });
+
+// Single-family algorithms allowlist — the new JWT "algorithm confusion"
+// rule only fires when BOTH an HMAC family (HS256/384/512) and an
+// asymmetric family (RS/ES/PS 256/384/512) appear in the same allowlist;
+// a single algorithm, however it's spelled, must never trip it.
+const verifyAlgSafe = { algorithms: ['RS256'] };  // safe: JWT / Auth Token Weakness
+const verifyAlgSafeHs = { algorithms: ["HS256", "HS512"] };  // safe: JWT / Auth Token Weakness

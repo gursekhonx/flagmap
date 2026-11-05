@@ -547,3 +547,51 @@ entry below.
   challenge now reports exactly the one real
   `gotenberg/gotenberg@8.0.3` finding, alongside the pre-existing
   generic root-user misconfig rather than instead of it.
+- ~~JWT "algorithm confusion" (an `algorithms` allowlist that accepts
+  BOTH an HMAC family and an asymmetric family against the same key)~~
+  — added in v1.31.0, see ARCHITECTURE.md and CAPABILITIES.md. From
+  DownUnderCTF 2024's public "i-am-confusion" web challenge
+  (`src/main-app/server.js`):
+  ```js
+  const verifyAlg = { algorithms: ['HS256','RS256'] }
+  ...
+  jwt.verify(cookie['auth'], publicKey, verifyAlg, (err, decoded_jwt) => { ... })
+  ```
+  The app signs every token with RS256 only (`jwt.sign(payload,
+  privateKey, { algorithm: 'RS256' })`), but the verify call's allowlist
+  accepts HS256 too, against the SAME `publicKey` variable. Since an
+  RSA public key isn't secret, an attacker fetches it and re-signs a
+  forged `{"user":"admin"}` token with alg:HS256 using the public key's
+  own bytes as the HMAC secret — `jwt.verify()` has no way to tell "this
+  key was only ever meant for RS256" from a single call with a mixed
+  allowlist, so the forged signature passes. The challenge's own
+  writeup walks through exactly this attack. flagmap already had a
+  `"generic"` JWT rule for a verify call with the algorithms allowlist
+  missing *entirely* (`jwt\.verify\s*\(\s*\w+\s*,\s*\w+\s*\)`, "low"/
+  "possible" — added earlier, its own comment even names this exact
+  attack as the risk) but nothing for the allowlist being *present* and
+  simply wrong, which is what the real challenge does and a strictly
+  more common real-world shape (teams who bother writing an explicit
+  allowlist at all tend to get it wrong this way, not leave it off).
+  Added a second `"generic"` pattern: a single-line regex matching an
+  `algorithms` list literal (covers both the JS object-property spelling
+  and Python/PyJWT's keyword-arg spelling — both use `[...]` with quoted
+  algorithm names, just `:` vs `=`) containing at least one HS256/384/512
+  entry together with at least one RS/ES/PS 256/384/512 entry, in either
+  order. Deliberately doesn't also try to confirm the verify key itself
+  is a public/certificate value on the same line: by the time an
+  allowlist mixes both families at all there is no key that is
+  simultaneously a safe HMAC secret and a legitimate asymmetric public
+  key, so the mixed-allowlist shape alone is the signal — "high"/
+  "likely", since every major JWT library's own docs call this
+  combination out as unsafe, not merely "possible." Verified against
+  both corpora: CyberSci's finding count and its 13 pre-existing JWT
+  hits are both unchanged (none of that archive's JWT findings mix
+  algorithm families — `voter_registry.py`'s `algorithms=["HS256"]` is
+  single-family, for instance), and the full DownUnderCTF 2024+2025
+  archive goes from 90 to 92 findings — exactly the two real hits (the
+  challenge's `src/` and `publish/` copies of the same `server.js`),
+  zero false positives elsewhere. Added JS fixtures (`vuln_sinks.js`/
+  `clean_sinks.js`) mirroring the real mixed-family case plus two
+  single-family negatives, since no dedicated fixture coverage existed
+  yet for this corner of the JWT rule family at all.

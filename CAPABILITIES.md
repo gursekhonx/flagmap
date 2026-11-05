@@ -91,7 +91,12 @@ Ruby/Rails, Lua, Rust):
   construct in a different language — see the hand-rolled-merge JS bullet
   further below for that language's version)
 - JWT / Auth Token Weaknesses (`verify=False`, `alg: none` accepted, missing
-  algorithm allowlist)
+  algorithm allowlist; and — added v1.31.0, see ARCHITECTURE.md — the
+  opposite problem: an algorithms allowlist that's present but mixes an
+  HMAC family (HS256/384/512) with an asymmetric family (RS/ES/PS
+  256/384/512) against the same verification key, the classic JWT
+  "algorithm confusion" attack — an RSA/EC public key isn't secret, so it
+  can be replayed as the HMAC secret for a forged HS256 token)
 - Weak Cryptography (MD5/SHA1 for password hashing, AES/DES in ECB mode)
 - Insecure Randomness (`random`/`Math.random()`/`rand()` used for
   tokens/passwords/OTPs instead of a CSPRNG)

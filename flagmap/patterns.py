@@ -757,6 +757,52 @@ RAW_PATTERNS = [
         "Try re-signing the token as HS256 using the server's RSA public key as the HMAC secret.",
         "possible",
     ),
+    (
+        # Found in DownUnderCTF 2024's public "i-am-confusion" web challenge
+        # (src/main-app/server.js): `const verifyAlg = { algorithms:
+        # ['HS256','RS256'] }`, then `jwt.verify(cookie['auth'], publicKey,
+        # verifyAlg, ...)`. The app only ever SIGNS with RS256 (an
+        # asymmetric private key), but the verify call's allowlist accepts
+        # BOTH 'HS256' and 'RS256' against the same single `publicKey`
+        # variable. Since an RSA public key is, by definition, not secret,
+        # an attacker can forge a token signed with alg:HS256 using that
+        # public key's bytes as the HMAC secret — jwt.verify() has no way
+        # to tell "this key was meant for RS256 only" from one call with a
+        # mixed allowlist, so it accepts the forged HS256 signature just as
+        # happily as a real RS256 one. This is the opposite problem from
+        # the rule immediately above (that one is an allowlist that's
+        # missing entirely; this one is an allowlist that's present but
+        # mixes an HMAC family with an RSA/ECDSA/RSA-PSS family) — the
+        # classic "JWT algorithm confusion" attack, and every major JWT
+        # library's own docs warn against exactly this combination.
+        # Single-line, same style as the other JWT rules: matches an
+        # `algorithms` list literal (JS object property or Python/PyJWT
+        # keyword arg — both use `[...]` with quoted algorithm names, just
+        # `:` vs `=`) containing at least one HS256/384/512 entry AND at
+        # least one RS/ES/PS 256/384/512 entry together, in either order.
+        # Deliberately doesn't try to also confirm the verify key is a
+        # public/certificate value on this same line — by the time BOTH
+        # algorithm families are allowlisted together at all, there is no
+        # single key that is simultaneously a safe HMAC secret and a
+        # legitimate RSA/EC public key, so the allowlist shape alone is
+        # the signal, same trade the missing-allowlist rule above already
+        # makes.
+        "JWT / Auth Token Weakness",
+        "generic",
+        r"""algorithms\s*[:=]\s*\[[^\]]*\bHS(?:256|384|512)\b[^\]]*\b(?:RS|ES|PS)(?:256|384|512)\b[^\]]*\]"""
+        r"""|algorithms\s*[:=]\s*\[[^\]]*\b(?:RS|ES|PS)(?:256|384|512)\b[^\]]*\bHS(?:256|384|512)\b[^\]]*\]""",
+        "high",
+        "This algorithms allowlist accepts BOTH an HMAC family (HS256/384/512) and an asymmetric family "
+        "(RS/ES/PS 256/384/512) in the same verification call. Since the token is signed with only one of "
+        "these in practice (almost always the asymmetric one, using a private key), and the public half of "
+        "an asymmetric keypair is not secret, an attacker can re-sign a forged token with alg:HS256 using the "
+        "server's own public key/certificate bytes as the HMAC secret — the classic JWT \"algorithm confusion\" "
+        "attack. There is no key that is safely usable for both families at once, so mixing them in one "
+        "allowlist is essentially always a bug, not a deliberate choice.",
+        "Fetch the server's RSA/EC public key or certificate, then sign a token with alg:HS256 using those "
+        "exact bytes (PEM, including header/footer and line breaks) as the HMAC secret.",
+        "likely",
+    ),
 
     # ---------------- WEAK / INSECURE CRYPTOGRAPHY ----------------
     (
