@@ -2053,6 +2053,51 @@ Verified: 211/211 regression (fixtures in the shared PHP
 DUCTF 2023 102 → 103 (`xxd-server/src/index.php:24`), every
 other corpus unchanged; `patterns.py` self-scan unchanged at 8.
 
+**Whole request dict minted into a token (`token_mass_assign_guard.py`,
+v1.38.0)**: from DownUnderCTF 2023's public "grades-grades-grades"
+challenge (`src/routes.py`):
+
+```python
+if request.method == 'POST':
+    jwt_data = request.form.to_dict()
+    jwt_cookie = current_app.auth.create_token(jwt_data)
+    ...
+    response.set_cookie('auth_token', jwt_cookie, httponly=True)
+```
+
+`create_token()` signs its argument as the JWT payload, and
+`requires_teacher` later trusts the payload's `is_teacher` claim. The
+signup form never offers that field, but every submitted field becomes a
+signed claim, so the challenge's solve script is one signup POST with
+`is_teacher=1` added. The existing Python Mass Assignment pattern only
+matches a double-star unpack of `request.json`/`request.form` into a call
+on one line; nothing here is unpacked, and the dict reaches the minter
+through a variable on the next line.
+
+Two signals, whole-file: (1) a variable assigned the *entire* request
+payload as a dict (`request.form/args/values.to_dict()`,
+`request.get_json(...)`, `request.json`, `dict(request.form)`); (2) that
+variable as the first argument of a token-minting call (`jwt.encode`, or
+anything named `*create*/*make*/*generate*/*issue*/*sign*/*encode*` +
+`token`/`jwt`). A whole-request expression passed directly to such a
+call matches on its own line too. Building claims from chosen fields
+(`{"stu_num": request.form["stu_num"]}`) never matches, and neither does
+a whole-request dict that's only stored in a database — both are `safe`
+fixture cases. Fires on the minting call, filed "Mass Assignment",
+"high"/"likely".
+
+The first self-scan of the new module flagged its own docstring — not
+via its own signals, but via the *existing* Mass Assignment regex, since
+the docstring quoted that rule's `**request.json` shape verbatim when
+explaining why it doesn't apply. Reworded.
+
+Verified: 216/216 regression with dedicated
+`tests/fixtures/python/token_mass_assign_vuln.py`/`_clean.py`;
+per-finding corpus diff shows only DUCTF 2023 103 → 104
+(`grades-grades-grades/src/src/routes.py:31`), all others unchanged.
+Known blind spots: no cross-file tracking, minting helpers not named
+with "token"/"jwt", and `session.update(request.form)`-style sessions.
+
 `report_md.py` deliberately has no fixture category of its own: it's a
 pure renderer over `Finding`/`Chain` objects the regression suite above
 already exercises and validates, with no detection logic of its own to

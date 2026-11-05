@@ -92,7 +92,11 @@ Ruby/Rails, Lua, Rust):
 - NoSQL Injection (MongoDB `find()`/`update()` with the whole filter taken
   from the request body)
 - Mass Assignment (`**request.json` into a constructor, `findByIdAndUpdate`
-  with the raw request body)
+  with the raw request body; and — added v1.38.0, see
+  `token_mass_assign_guard.py`/ARCHITECTURE.md, Python — the whole request
+  form/JSON dict, directly or via a variable, passed as the payload of a
+  token-minting call like `jwt.encode(...)`/`create_token(...)`, so every
+  submitted field becomes a signed claim)
 - Prototype Pollution (`_.merge`/`deepmerge` into `{}` from request data;
   and — added v1.29.0, see `class_pollution_guard.py`/ARCHITECTURE.md —
   Python's version of the same bug, sometimes called "class pollution": a

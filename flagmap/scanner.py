@@ -30,6 +30,7 @@ from .jsp_cookie_xss_guard import find_jsp_cookie_xss, JSP_EXTENSIONS
 from .class_pollution_guard import find_class_pollution, CLASS_POLLUTION_LANGUAGES
 from .forin_prefix_pollution_guard import find_forin_prefix_pollution, FORIN_PREFIX_LANGUAGES
 from .xff_trust_guard import find_xff_trust, XFF_LANGUAGES
+from .token_mass_assign_guard import find_token_mass_assign, TOKEN_MASS_ASSIGN_LANGUAGES
 
 # No hand-written vulnerable application code is ever a single line this long —
 # only minified/bundled vendor files (tailwindcss.js, jquery.min.js, etc.) are,
@@ -590,6 +591,30 @@ def scan_lines(path: str, language: str, lines: List[str], patterns: list) -> Li
                 payload="Send X-Forwarded-For: <the allowed IP> (e.g. 127.0.0.1). If a proxy appends the real "
                         "address, try sending the header twice, or a comma list ending in the allowed IP.",
                 confidence="possible",
+            ))
+
+    # best-effort "the whole request form/JSON body becomes a token's
+    # claims" Mass Assignment — a whole-request dict (via an intermediate
+    # variable or directly) passed as the payload of a token-minting call.
+    # See token_mass_assign_guard.py's module docstring.
+    if language in TOKEN_MASS_ASSIGN_LANGUAGES:
+        for tf in find_token_mass_assign(path, language, lines):
+            key = (tf.line_no, "Mass Assignment")
+            if key in seen:
+                continue
+            seen.add(key)
+            findings.append(Finding(
+                file=tf.file,
+                line_no=tf.line_no,
+                line_text=tf.line_text,
+                vuln_name="Mass Assignment",
+                severity="high",
+                why="The entire request form/JSON body is passed as the payload of a token-minting call, so "
+                    "every field the client submits becomes a signed claim — including ones the form never "
+                    "offered, like a role/admin/is_teacher flag the app later trusts for authorization.",
+                payload="Add the privilege claim the app checks to the same request, e.g. is_admin=1 / "
+                        "role=admin / is_teacher=1, then use the returned token.",
+                confidence="likely",
             ))
 
     return findings

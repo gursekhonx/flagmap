@@ -817,3 +817,22 @@ entry below.
   per-finding corpus diff shows only DUCTF 2023 102 → 103 — the real
   line — with CyberSci (392), DUCTF 2024 (95) and DUCTF 2025 (147)
   unchanged; `patterns.py` self-scan unchanged at 8.
+- ~~Whole request form/JSON dict minted into a token as its claims~~ —
+  added in v1.38.0, see ARCHITECTURE.md and CAPABILITIES.md. From
+  DownUnderCTF 2023's public "grades-grades-grades" challenge
+  (`src/routes.py`): `jwt_data = request.form.to_dict()` then
+  `jwt_cookie = current_app.auth.create_token(jwt_data)`. Every submitted
+  field becomes a signed JWT claim, and the app's `requires_teacher`
+  trusts `is_teacher` — the solve is one signup POST with `is_teacher=1`
+  added. The existing Python Mass Assignment pattern only matches a
+  one-line double-star unpack of the request. Added
+  `token_mass_assign_guard.py` (two whole-file signals: a variable
+  assigned the entire request payload as a dict, and that variable as
+  the first argument of `jwt.encode`/a `*create*…token*`-style minting
+  call; a direct whole-request argument also matches). The new module's
+  first self-scan flagged its own docstring via the *existing* Mass
+  Assignment regex (it quoted that rule's shape) — reworded. Verified:
+  216/216 regression with dedicated vuln/clean fixtures (clean: claims
+  built from chosen fields; a whole-request dict only stored in a DB);
+  per-finding corpus diff shows only DUCTF 2023 103 → 104, the real line;
+  guard and `scanner.py` self-scan clean.
