@@ -198,3 +198,12 @@ entries = files.find({"$or": [{'filename': {'$regex': search}}]})  # ruleid: NoS
 # 2023 "85-reasons-why" (SQLAlchemy text() under a line-continued call).
 res = db.session.connection().execute(\
     text("select parent as PID from images where b85_image = '{}' AND active".format(spic)))  # ruleid: SQL Injection
+
+# Cookie-sourced SSTI — mirrors UofTCTF 2024 "My First App": a JWT read
+# from request.cookies, decoded, interpolated into a template string.
+@web.route('/dashboard')
+def dashboard_cookie_ssti():
+    user_info = decode_jwt(request.cookies.get('auth_token'))
+    title_text = f"Welcome, {user_info['username']}"
+    dashboard_template = f'''<h1>{title_text}</h1>'''
+    return render_template_string(dashboard_template)  # ruleid: Server-Side Template Injection (SSTI)

@@ -122,3 +122,9 @@ app.post("/generate-invoice", async (req, res) => {
   const { cmd = "ls" } = req.query;
   exec(cmd);  // ruleid: Command Injection
 });
+
+// Header-sourced command injection (v1.54.0: headers/cookies are sources).
+app.get("/ua", (req, res) => {
+  const agent = req.headers["user-agent"];
+  execSync(agent);  // ruleid: Command Injection
+});

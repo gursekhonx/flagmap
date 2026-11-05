@@ -1101,3 +1101,19 @@ entry below.
   an unsigned user-value cookie as safe); per-finding corpus diff: LA CTF
   191 → 194 (clawcha plus both new-housing-portal cookie lines); all
   other corpora unchanged; guard and `scanner.py` self-scan clean.
+- ~~Python and JS AST engine didn't treat cookies or headers as user
+  input~~ — fixed in v1.54.0, see ARCHITECTURE.md and CAPABILITIES.md.
+  Found by running the UofTCTF public archives (2024–2026; University of
+  Toronto's CTF, the closest in style to CyberSci of the external sources
+  so far). 2024 "My First App": `request.cookies.get('auth_token')` →
+  `decode_jwt(...)` → `f"Welcome, {user_info['username']}"` → an f-string
+  template → `render_template_string(dashboard_template)` — the intended
+  SSTI (the JWT key is `torontobluejays`, in rockyou). Every step
+  propagated except the first: Python's sources were
+  `args/form/values/json/files` only, and JS's `query/params/body`, while
+  PHP, Go and Ruby already counted cookies and headers. Added `cookies`
+  and `headers` to both. Verified: 275/275 regression (cookie → SSTI in
+  Python and header → `execSync` in JS as `ruleid`; a cookie passed only
+  to `render_template` as `safe`); per-finding corpus diff: UofTCTF
+  117 → 118, the real line only — no other corpus changed;
+  `ast_engine.py` self-scan clean.

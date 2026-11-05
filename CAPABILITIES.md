@@ -210,6 +210,9 @@ Ruby/Rails, Lua, Rust):
   "Hardcoded Secret in ..." misconfiguration checks below — this one
   catches the same underlying mistake one layer deeper, baked directly
   into application source
+- Cookies and headers as taint sources for the Python and JS AST engine
+  (added v1.54.0): `request.cookies`/`request.headers`, `req.cookies`/
+  `req.headers` — PHP, Go and Ruby already counted theirs
 - LDAP Injection (AST-matched since v1.4.0, Python/PHP/Java): a search
   filter string built from request data and passed to python-ldap's
   `search_s`/`search_st`/`search_ext`/`search_ext_s`, PHP's `ldap_search`/

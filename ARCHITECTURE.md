@@ -2658,6 +2658,42 @@ plus both housing-portal lines); every other corpus unchanged. Fixtures
 `tests/fixtures/js/signed_cookie_vuln.js` / `_clean.js` (clean: a signed
 server-generated session id; an unsigned cookie holding a username).
 
+**Cookies and headers are taint sources in Python and JS
+(`ast_engine.py`, v1.54.0)**: the first fix from the UofTCTF archives
+(`UofTCTF/uoftctf-{2024,2025,2026}-chals-public`; the web challenges of
+all three years are now a sixth evidence corpus). 2024 "My First App":
+
+```python
+token = request.cookies.get('auth_token')
+user_info = decode_jwt(token)
+...
+title_text = f"Welcome, {user_info['username']}"
+...
+dashboard_template = f'''
+{{% extends "layout.html" %}}
+...<h1 class="welcome-text">{title_text}</h1> ...'''
+return render_template_string(dashboard_template)
+```
+
+The JWT's signing key is `torontobluejays` (crackable with rockyou), so
+the username claim is attacker-chosen and lands inside a Jinja template —
+SSTI, behind a blacklist the rest of the challenge is about bypassing.
+Probing the AST engine step by step showed every link propagated (call
+results, subscripts, nested and triple-quoted f-strings) except the
+first: `SOURCE_TEXT_RE["python"]` listed `request.args/form/values/json/
+files` and the JS entry `req.query/params/body`. PHP (`$_COOKIE`), Go
+(`r.Cookie`, `r.Header.Get`) and Ruby (`cookies[]`, `request.headers`)
+already counted cookies and headers; Python and JS now do too. A cookie
+or header is as client-controlled as a query parameter — the only thing
+that changes is how the client sets it.
+
+Verified with the per-finding diff across all six corpora: UofTCTF
+117 → 118, `My First App/src/routes.py:74`, and no other change anywhere —
+so the wider source set didn't drag in noise from the many apps that read
+a session cookie only to look it up. Fixtures: cookie → JWT → f-string →
+`render_template_string` (Python) and `req.headers[...]` → `execSync`
+(JS) as `ruleid`; a cookie passed only to `render_template` as `safe`.
+
 `report_md.py` deliberately has no fixture category of its own: it's a
 pure renderer over `Finding`/`Chain` objects the regression suite above
 already exercises and validates, with no detection logic of its own to

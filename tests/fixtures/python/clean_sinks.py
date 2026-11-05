@@ -128,3 +128,9 @@ escaped = files.find({'filename': {'$regex': re.escape(search)}})  # safe: NoSQL
 # .format() on a non-SQL string, and a bound parameter in text().
 label = "Selected {} files from the list".format(count)  # safe: SQL Injection
 res = conn.execute(text("select * from images where b85_image = :img"), {"img": spic})  # safe: SQL Injection
+
+# A cookie read that never reaches a template string.
+@web.route('/hello')
+def hello_cookie_safe():
+    theme = request.cookies.get('theme')
+    return render_template('hello.html', theme=theme)  # safe: Server-Side Template Injection (SSTI)

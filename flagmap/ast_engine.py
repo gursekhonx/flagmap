@@ -218,8 +218,17 @@ IDENTIFIER_NODE_TYPE = {
 # code for it to accidentally match into, and no risk of catastrophic
 # backtracking since nodes are small.
 SOURCE_TEXT_RE = {
-    "python": re.compile(r"""\brequest\.(?:args|form|values|json|files)\b"""),
-    "js": re.compile(r"""\breq\.(?:query|params|body)\b"""),
+    # (v1.54.0) cookies/headers added for Python and JS, matching what the
+    # PHP ($_COOKIE), Go (r.Cookie, r.Header.Get) and Ruby (cookies[],
+    # request.headers) entries already counted. Found via UofTCTF 2024's
+    # public "My First App": the username in a JWT read from
+    # request.cookies reaches render_template_string() through an f-string
+    # — the intended SSTI — and nothing fired, because a cookie wasn't a
+    # source. A cookie or header is exactly as client-controlled as a
+    # query parameter; signing (as here) only matters if the key is
+    # secret, and this one was in rockyou.
+    "python": re.compile(r"""\brequest\.(?:args|form|values|json|files|cookies|headers)\b"""),
+    "js": re.compile(r"""\breq\.(?:query|params|body|cookies|headers)\b"""),
     "php": re.compile(r"""\$_(?:GET|POST|REQUEST|COOKIE)\b"""),
     # net/http's Request methods, plus gorilla/mux and go-chi's router
     # param accessors — the three ways a Go CTF handler usually reads
