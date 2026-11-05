@@ -161,7 +161,9 @@ Ruby/Rails, Lua, Rust):
   `display_errors`; and — added v1.52.0 — a Dockerfile whose final stage
   starts a dev server: `next dev`, `npm|pnpm|yarn|bun run dev`, `nodemon`)
 - Weak Auth Logic (PHP loose `==` type juggling, `strcmp` bypass, hardcoded
-  secrets; and — added v1.36.0, see `xff_trust_guard.py`/ARCHITECTURE.md,
+  secrets; an Express signed cookie set to a client-chosen string and read
+  via `req.signedCookies`, which JSON-decodes a `j:` prefix — added v1.53.0,
+  see `signed_cookie_guard.py`; and — added v1.36.0, see `xff_trust_guard.py`/ARCHITECTURE.md,
   Python/JS/Go/PHP — a client IP read from the `X-Forwarded-For`/
   `X-Real-IP` header in a file that also makes an IP-allowlist decision
   with it, since that header is client-controlled)

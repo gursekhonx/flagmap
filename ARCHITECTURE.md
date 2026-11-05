@@ -2616,6 +2616,48 @@ DUCTF 2024 back to unchanged; everything else unchanged. Fixtures:
 harness picks up any file there with `# ruleid`/`# safe` markers and
 `scan_path` routes a `Dockerfile.*` name through the config scanner.
 
+**Signed cookie holding a client-chosen string (`signed_cookie_guard.py`,
+v1.53.0)**: from LA CTF 2026's public "clawcha" challenge (`app.js`):
+
+```js
+app.use(cookieParser(secret));
+app.use((req, res, next) => {
+  if (typeof req.signedCookies.username === 'string') {
+    if (users.has(req.signedCookies.username)) res.locals.user = users.get(req.signedCookies.username);
+  ...
+app.post('/login', (req, res) => {
+  const username = req.body.username;
+  ...
+  if (!users.has(username)) users.set(username, { username, password, owner: false });
+  ...
+  res.cookie('username', username, { signed: true })
+```
+
+cookie-parser decodes any cookie value that starts with `j:` as JSON — and
+it does that *after* verifying a signature, so signed cookies are no
+exception. Signing proves the server produced the bytes, not what they
+mean. Register the username `j:"r2uwu2"` (the owner), get a signed cookie
+for exactly that string, and `req.signedCookies.username` comes back as
+`r2uwu2`. The challenge notes record that this was reported to Express
+and judged intended: validating what you sign is the developer's job.
+
+Three whole-file signals: (1) a name bound from `req.body/query/params`
+(plain or destructured); (2) `.cookie(<name>, <that variable, or a direct
+req.* member>, { ... signed: true ... })` on one line; (3) `signedCookies`
+read anywhere in the file — the decoding side. Filed as "Weak Auth Logic",
+"high"/"likely", on the `.cookie(` line. A value built *from* the input
+(`"u:" + name`) can't start with `j:` and isn't matched, correctly.
+
+The per-finding diff found a second real instance that nobody had pointed
+at: LA CTF 2024's "new-housing-portal" sets `.cookie('auth', username, {
+signed: true, httpOnly: true })` on both register and login, with
+`username = req.body.username?.trim()` and a seeded admin `samy`.
+Registering `j:"samy"` would decode to `samy` — apparently an unintended
+route alongside that challenge's intended XSS. LA CTF 191 → 194 (clawcha
+plus both housing-portal lines); every other corpus unchanged. Fixtures
+`tests/fixtures/js/signed_cookie_vuln.js` / `_clean.js` (clean: a signed
+server-generated session id; an unsigned cookie holding a username).
+
 `report_md.py` deliberately has no fixture category of its own: it's a
 pure renderer over `Finding`/`Chain` objects the regression suite above
 already exercises and validates, with no detection logic of its own to

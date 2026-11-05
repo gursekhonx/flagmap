@@ -1082,3 +1082,22 @@ entry below.
   `Dockerfile.devserver` / `.prodserver` / `.multistage` fixtures, the
   last mirroring sunzi); per-finding corpus diff: LA CTF 190 → 191, the
   real line only; every other corpus unchanged.
+- ~~Express signed cookie set to a client-chosen string (cookie-parser
+  `j:` JSON decoding)~~ — added in v1.53.0, see ARCHITECTURE.md and
+  CAPABILITIES.md. From LA CTF 2026's public "clawcha" challenge: login
+  sets `res.cookie('username', username, { signed: true })` with
+  `username` straight from the body, and `req.signedCookies.username`
+  identifies the user. cookie-parser JSON-decodes any value starting
+  with `j:`, signed or not, so registering the name `j:"r2uwu2"` yields a
+  validly signed cookie that decodes to the owner's name (the author notes
+  Express considers this intended). Added `signed_cookie_guard.py`: a
+  request-bound name (plain or destructured), `.cookie(..., that value,
+  { ... signed: true ... })` on one line, and `signedCookies` read
+  somewhere in the file. The corpus diff found the identical shape in LA
+  CTF 2024 "new-housing-portal" (register and login both sign the raw
+  username; registering `j:"samy"` would decode to the seeded admin) — an
+  apparently unintended second route into that challenge. Verified:
+  272/272 regression (vuln/clean fixtures: signed server-generated id and
+  an unsigned user-value cookie as safe); per-finding corpus diff: LA CTF
+  191 → 194 (clawcha plus both new-housing-portal cookie lines); all
+  other corpora unchanged; guard and `scanner.py` self-scan clean.
