@@ -27,6 +27,7 @@ from .ast_engine import scan_ast, AST_SUPPORTED_LANGUAGES
 from .jenkins_pipeline_guard import find_jenkins_param_injection, GROOVY_LANGUAGES
 from .zipslip_guard import find_zip_slip, ZIP_LANGUAGES
 from .jsp_cookie_xss_guard import find_jsp_cookie_xss, JSP_EXTENSIONS
+from .class_pollution_guard import find_class_pollution, CLASS_POLLUTION_LANGUAGES
 
 # No hand-written vulnerable application code is ever a single line this long —
 # only minified/bundled vendor files (tailwindcss.js, jquery.min.js, etc.) are,
@@ -499,6 +500,35 @@ def scan_lines(path: str, language: str, lines: List[str], patterns: list) -> Li
                 payload="Set the cookie this variable is read from to a value like "
                         "\"\\\"><script>alert(document.domain)</script>\".",
                 confidence="likely",
+            ))
+
+    # best-effort Python class pollution: a for k, v in <dict>.items():
+    # loop's own key/value variables are passed straight into
+    # setattr(obj, k, v) elsewhere in the file — the Python analog of
+    # the JS homemade-recursive-merge Prototype Pollution rule above,
+    # filed under the same vuln name. See class_pollution_guard.py's
+    # module docstring.
+    if language in CLASS_POLLUTION_LANGUAGES:
+        for cf in find_class_pollution(path, language, lines):
+            key = (cf.line_no, "Prototype Pollution")
+            if key in seen:
+                continue
+            seen.add(key)
+            findings.append(Finding(
+                file=cf.file,
+                line_no=cf.line_no,
+                line_text=cf.line_text,
+                vuln_name="Prototype Pollution",
+                severity="high",
+                why="This setattr() call writes an attribute whose NAME is a loop variable bound by a "
+                    "`for k, v in <dict>.items():` loop — a hand-rolled recursive merge with no denylist on "
+                    "dunder names. Python's setattr() doesn't special-case them: a key like \"__class__\" "
+                    "walks to the object's own class, \"__init__\" to its constructor function, and "
+                    "\"__globals__\" to that function's module-level globals dict, letting an attacker "
+                    "overwrite arbitrary module globals (sometimes called \"class pollution\", the Python "
+                    "analog of JS prototype pollution) if the merged-in dict ever comes from request data.",
+                payload="{\"__class__\": {\"__init__\": {\"__globals__\": {\"SOME_GLOBAL\": \"polluted\"}}}}",
+                confidence="possible",
             ))
 
     return findings

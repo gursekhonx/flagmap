@@ -80,7 +80,16 @@ Ruby/Rails, Lua, Rust):
   from the request body)
 - Mass Assignment (`**request.json` into a constructor, `findByIdAndUpdate`
   with the raw request body)
-- Prototype Pollution (`_.merge`/`deepmerge` into `{}` from request data)
+- Prototype Pollution (`_.merge`/`deepmerge` into `{}` from request data;
+  and — added v1.29.0, see `class_pollution_guard.py`/ARCHITECTURE.md —
+  Python's version of the same bug, sometimes called "class pollution": a
+  hand-rolled recursive merge that loops over a dict's `.items()` and
+  calls `setattr(obj, key, value)` with the loop's own key/value variables
+  and no denylist on dunder names, letting a crafted nested dict walk
+  `__class__` → `__init__` → `__globals__` to overwrite arbitrary module
+  globals. Filed under this same vuln name since it's the identical
+  construct in a different language — see the hand-rolled-merge JS bullet
+  further below for that language's version)
 - JWT / Auth Token Weaknesses (`verify=False`, `alg: none` accepted, missing
   algorithm allowlist)
 - Weak Cryptography (MD5/SHA1 for password hashing, AES/DES in ECB mode)
@@ -257,6 +266,10 @@ Ruby/Rails, Lua, Rust):
 - A hand-rolled recursive merge utility with no guard of its own (`key in
   target` walking the prototype chain) — Prototype Pollution that survives
   even when an upstream parser blocklists `__proto__`/`constructor`
+  (Python's version of this same hand-rolled-merge shape, via `setattr()`
+  and `__class__`/`__globals__` instead of `__proto__`/`constructor`, is
+  covered too — see the Prototype Pollution bullet above and
+  `class_pollution_guard.py`, v1.29.0)
 - Puppeteer/Playwright `page.goto()` fed a bare variable — SSRF via an
   admin/review bot visiting an attacker-chosen URL, a different API shape
   than HTTP-client SSRF (axios/requests/curl)

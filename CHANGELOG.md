@@ -454,3 +454,50 @@ entry below.
   both the CyberSci corpus (count unchanged, confirming zero
   cross-contamination) and the full DownUnderCTF 2024+2025 public
   archive: exactly the two real hits, zero false positives elsewhere.
+- ~~Python "class pollution" (the Python analog of JS Prototype
+  Pollution — a hand-rolled recursive merge calling `setattr()` with an
+  attacker-controlled attribute name and no denylist on dunder names)~~
+  — added in v1.29.0, see ARCHITECTURE.md and CAPABILITIES.md. From
+  DownUnderCTF 2024's public "co2" web challenge and its sequel "co2v2"
+  (`DownUnderCTF/Challenges_2024_Public`), which share the EXACT same
+  `merge()` helper verbatim — real, duplicated evidence of the same
+  shape, not a one-off:
+  ```python
+  def merge(src, dst):
+      for k, v in src.items():
+          ...
+          else:
+              setattr(dst, k, v)
+  ```
+  `co2`'s route handler merges a fresh JSON body straight into a
+  `Feedback()` instance with zero key filtering. Since `setattr()`
+  doesn't special-case dunder names, `{"__class__": {"__init__":
+  {"__globals__": {"flag": "true"}}}}` walks the instance's own class,
+  to its constructor, to that function's module globals, and overwrites
+  the module-level `flag` variable directly — the exact gadget chain in
+  the writeup's linked reference article, "Prototype pollution in
+  Python". `patterns.py` already had two JS-only Prototype Pollution
+  rules (one for `_.merge`/`deepmerge({}, req.body)`, one for the
+  homemade `instanceof Object && key in target` merge shape) but nothing
+  for Python's equivalent at all. Added `class_pollution_guard.py`, a
+  two-signal whole-file check filed under the SAME vuln name as the JS
+  rules (both describe the identical class of bug, just different
+  languages and magic-attribute vocabularies): a `for k, v in
+  <dict>.items():` loop, and a `setattr(obj, k, v)` call elsewhere in
+  the file using those exact two variable names — not provable taint,
+  the same trade the existing JS homemade-merge rule already makes, on
+  the theory that a generic merge helper written this way is rarely fed
+  only trusted, fully-known keys. Caught and fixed a self-referential
+  documentation trap during development, the same kind `xxe_guard.py`'s
+  own docstring warns about: an early draft of this module's own
+  docstring quoted the real vulnerable code verbatim (`for k, v in
+  src.items():` plus `setattr(dst, k, v)`), which meant the module's own
+  source file satisfied both of its own detection signals and
+  self-flagged three times — fixed by paraphrasing the illustrative
+  example (parenthesized tuple-unpacking, `dst.__setattr__(...)` instead
+  of `setattr(...)`) so the docstring is no longer syntactically
+  identical to what it describes. Verified against both the CyberSci
+  corpus (count unchanged) and the full DownUnderCTF 2024+2025 archive
+  (`grep -rl "setattr("` across the whole archive turns up exactly these
+  two files): exactly the two real hits, at the exact real `setattr(dst,
+  k, v)` line in each, zero false positives elsewhere.

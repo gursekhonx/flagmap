@@ -747,6 +747,95 @@ an escaping helper under a name this module doesn't recognize would be
 wrongly flagged. Accepted on the same terms as every other best-effort
 guard in this project.
 
+**Python "class pollution" — `class_pollution_guard.py` (v1.29.0)**: from
+DownUnderCTF 2024's public "co2" web challenge and its sequel "co2v2"
+(both `DownUnderCTF/Challenges_2024_Public`), which share the EXACT same
+`merge()` helper — real, duplicated evidence of one generalizable shape,
+not a one-off:
+
+```python
+def merge(src, dst):
+    for k, v in src.items():
+        if hasattr(dst, '__getitem__'):
+            if dst.get(k) and type(v) == dict:
+                merge(v, dst.get(k))
+            else:
+                dst[k] = v
+        elif hasattr(dst, k) and type(v) == dict:
+            merge(v, getattr(dst, k))
+        else:
+            setattr(dst, k, v)
+```
+
+`co2`'s route handler merges a fresh JSON body straight into a
+`Feedback()` instance with zero key filtering: `merge(json.loads(
+request.data), feedback)`. `setattr()` doesn't special-case dunder
+names, so a payload of `{"__class__": {"__init__": {"__globals__":
+{"flag": "true"}}}}` walks `feedback.__class__` (the class itself) to
+`.__init__` (its constructor function) to `.__globals__` (that
+function's module-level globals dict), landing on and overwriting the
+module-level `flag` variable the `/get_flag` route checks — the real
+chain in the challenge's own writeup, which calls this "class
+pollution" and links to a reference article of the same name. `co2v2`
+carries the identical `merge()` forward untouched into the next round
+(that round's own fix addressed a different endpoint).
+
+`patterns.py` already has two "Prototype Pollution" rules, but both are
+JS-only: one matches `_.merge`/`deepmerge({}, req.body)`-style library
+calls, the other matches the homemade `instanceof Object && key in
+target` recursive-merge shape. Python's version of the identical
+mistake — a hand-rolled merge calling `setattr()` with the key itself as
+the attribute name — had no coverage in any language. `class_pollution_
+guard.py` is a two-signal whole-file regex module, filed under the SAME
+`"Prototype Pollution"` vuln name as the two JS rules (same underlying
+bug, different language and different magic-attribute vocabulary —
+`__proto__`/`constructor` in JS, `__class__`/`__globals__` in Python):
+(1) a `for k, v in <dict>.items():` loop, capturing the two bound
+variable names; (2) a `setattr(<obj>, k, v)` call elsewhere in the file
+using those EXACT two names as the attribute-name and value arguments.
+No attempt is made to prove `src` traces back to request data on this
+line — the same trade the existing JS homemade-merge rule already
+makes, since the dangerous construct itself (dict-driven `setattr` with
+no denylist) is the signal, and a "generic merge helper" shaped this way
+is rarely fed only trusted, fully-known keys in practice.
+
+Caught and fixed a real self-referential documentation bug during
+development — the exact trap `vuln_sinks.py`'s own comments already
+warn about for `xxe_guard.py` and `loot.py`: this module's docstring
+originally quoted the real vulnerable code verbatim, including both
+`for k, v in src.items():` and `setattr(dst, k, v)` — which meant
+`class_pollution_guard.py`'s OWN source file satisfied both of its own
+detection signals and self-flagged three separate times when flagmap was
+run against its own codebase. Fixed by paraphrasing the illustrative
+example in the docstring (parenthesized tuple-unpacking syntax, `dst.
+__setattr__(...)` instead of a literal `setattr(...)` call) so the
+documentation is no longer byte-for-byte identical to the pattern it
+describes, while still faithfully representing the real bug's shape.
+The fixtures hit a lighter version of the same trap during development
+too (an explanatory comment that spelled out `setattr(dst, k, v)` in
+prose, and a "safe" case whose own variable names coincidentally matched
+the vulnerable shape) — both corrected the same way, by rewording rather
+than by special-casing the detector.
+
+Verified against both corpora: the CyberSci corpus's total finding count
+is unchanged (confirming zero cross-contamination — nothing in that
+corpus has this `for`-loop-into-`setattr` shape at all), and the full
+DownUnderCTF 2024+2025 archive (`grep -rl "setattr("` across it turns up
+exactly these two files, plus flagmap's own fixture and this guard
+module) fires exactly twice, at the real `setattr(dst, k, v)` line in
+each file, with no other hits anywhere.
+
+Known blind spots, same honesty standard as every other guard here: no
+suppression for an explicit denylist/allowlist check written near the
+loop (e.g. `if k.startswith('__'): continue`, or copying only a fixed
+set of field names) — neither real occurrence has one, so this hasn't
+needed to get precise about recognizing one yet, and a function that DID
+guard this way would be a false positive today; and a `setattr` call
+using the right variable names by pure coincidence, fed by an unrelated
+loop reusing those names for something harmless, would also false-
+positive (not observed in either real file). Accepted on the same terms
+as every other best-effort guard in this project.
+
 **Missing Authentication Check (`authn_guard.py`, v1.15.0) and guarded-
 deserialization advice (`pickle_guard.py`, v1.15.0)** both came out of
 testing flagmap against a real attached CTF challenge rather than a
