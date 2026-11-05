@@ -1673,6 +1673,10 @@ EXTENSION_LANGUAGE = {
     ".erb": "ruby",
     ".lua": "lua",
     ".rs": "rust",
+    # Regex-only (no tree-sitter grammar in this codebase) — see
+    # jenkins_pipeline_guard.py for why, and for what the "groovy" tag
+    # actually gets checked for.
+    ".groovy": "groovy",
 }
 
 # Directories we never want to crawl into (noise, not challenge source).

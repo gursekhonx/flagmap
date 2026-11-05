@@ -349,6 +349,86 @@ match), a bare member-expression value (matches), and a template literal
 with a real interpolation (matches, since a backtick string is never "just
 a static string" the way a single/double-quoted one is).
 
+**Jenkins declarative-pipeline parameter injection — a 9th language that
+deliberately isn't one (`jenkins_pipeline_guard.py`, v1.24.0)**: continuing
+the CyberSci audit into nationals-2025-26's "deployment_hell" defence
+challenge, whose Jenkins pipeline (`service/jenkins/scripts/
+deploy-app.groovy`, `build-and-upload.groovy`) declares a
+`string(name: 'projectName', ...)` build parameter, aliases it to an env
+var one stage earlier (`env.PROJECT_NAME = params.projectName`), and
+interpolates that var straight into a `sh '''...${PROJECT_NAME}...'''`
+step. Jenkins substitutes `${PROJECT_NAME}` as literal shell text before
+handing the script to `/bin/sh` — the Groovy quoting used to write the
+step (`'''`, which does NOT GString-interpolate at the Groovy level at
+all) is irrelevant, since Jenkins' own `sh` step treats its whole string
+argument as a shell script regardless; the substitution happens in the
+shell, not in Groovy. Anyone able to trigger a parameterized build (on
+many real Jenkins installs, that's "Build" permission, sometimes even
+anonymous) therefore controls part of the command the agent executes.
+Zero coverage before this version: flagmap had no Groovy/Jenkinsfile
+language at all, neither AST nor regex.
+
+Deliberately NOT built as a 9th `tree-sitter`-backed AST language, even
+though that's the pattern every other multi-file-shape check in this
+project follows (sql_construct.py, idor.py, authn_guard.py all walk a real
+parse tree). Two reasons, both concrete rather than "AST is more work
+generically": no `tree-sitter-groovy` grammar exists anywhere in this
+codebase's dependency tree, so adding one would mean vetting and wiring
+in a 9th grammar for a single evidenced pattern; and even with that
+grammar, the real files above write their `sh` step using Groovy's
+parenthesis-free "command syntax" (`sh '''...'''`, not `sh('''...''')`),
+which the *existing* taint-lite regex engine's generic sink matcher in
+`taint.py` (`\b(sinkname)\s*\(`, hard-coded to require an opening paren
+right after the sink name) couldn't reach either — so even a full AST
+port would still need a Groovy-specific sink-matching path for this one
+call shape, not a reuse of the existing per-language tables the way
+`.ts`/`.tsx` reused `"js"`'s. Given that, a lightweight whole-file regex
+check — same two-independent-signals discipline as `csrf.py`'s
+form-plus-no-token-anywhere check and `jquery_dom_guard.py`'s
+param-plus-no-server-signal check — was the better-scoped fix: (1) every
+`string(name: 'X', ...)` parameter name declared anywhere in the file,
+plus every `env.Y = params.X` direct alias found the same way, forms the
+tainted-name set; (2) every `sh` step's own body (parenthesis-free or
+parenthesized/`script:`-keyed, single/double/triple-quoted, spanning
+multiple physical lines for the triple-quoted case) is checked for a
+`${NAME}`/`$NAME`/`params.NAME` reference to any name in that set. Fires
+only when both signals land in the same file — a `sh` step with no
+parameter-derived variable anywhere in its body, or a parameter declared
+but never used in any `sh` step (both deliberately included in this
+version's own fixture, see "Testing"), are each left alone.
+
+Caught and fixed two of its own bugs during development, same discipline
+as every other guard in this project:
+- The `sh`-step regex's first draft anchored on a bare `\bsh\b` word
+  boundary, which matches the literal word "sh" wherever it appears as
+  its own token — including inside this version's own first fixture
+  attempt, where a descriptive stage name ending in "...multi-line sh"
+  sat immediately before its own closing Groovy string quote. To a
+  word-boundary matcher, "sh" followed by a quote looks exactly like the
+  start of a real `sh` step; it then consumed everything up to the next
+  quote as a fake "step body" and missed the real steps entirely. Fixed
+  by anchoring to the start of a (whitespace-trimmed) line instead of a
+  bare word boundary — every real Jenkinsfile `sh` step is written as its
+  own statement starting a line, so this is both safer and loses no real
+  coverage.
+- The variable-reference regex's `\$\{?(\w+)\}?` alternative, meant to
+  catch a plain `${NAME}`/`$NAME` reference, matched `${params.projectName}`
+  as the single word "params" — `\w+` stops at the first non-word
+  character, and a property-access `.` isn't one, so it never reached
+  "projectName" at all. The captured name "params" isn't any real
+  parameter, so this silently matched nothing rather than erroring,
+  which is exactly the quiet failure mode this kind of regex bug tends to
+  produce. Fixed by adding an optional `(?:params\.)?` prefix inside that
+  same alternative, so `${params.projectName}` and `${PROJECT_NAME}` both
+  correctly resolve to the parameter name.
+
+Verified against the full 4-snapshot corpus: zero findings on every other
+`.groovy` file present (`exfilAwsKeys.groovy`, `pluginExport.groovy`
+(both copies), `approveScripts.groovy` — none of which reference any
+declared build parameter inside a `sh` step), and correct hits on both
+real vulnerable files, at exactly the lines containing the real
+`${PROJECT_NAME}`-interpolating `sh` steps.
+
 **Missing Authentication Check (`authn_guard.py`, v1.15.0) and guarded-
 deserialization advice (`pickle_guard.py`, v1.15.0)** both came out of
 testing flagmap against a real attached CTF challenge rather than a

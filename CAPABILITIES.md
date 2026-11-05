@@ -18,7 +18,18 @@ Ruby/Rails, Lua, Rust):
   added v1.15.0, see `sql_construct.py` and ARCHITECTURE.md — a query built
   via "." concatenation or inline interpolation spanning multiple physical
   lines, independent of patterns.py's single-line regexes)
-- Command Injection / RCE (`system`, `exec`, `eval`, `shell_exec`, etc.)
+- Command Injection / RCE (`system`, `exec`, `eval`, `shell_exec`, etc., and
+  — added v1.24.0, Groovy/Jenkinsfile only, best-effort, see
+  `jenkins_pipeline_guard.py` and ARCHITECTURE.md's "Best-effort
+  heuristics" section — a Jenkins declarative pipeline's own `string`
+  build parameter, referenced directly or via a one-hop `env.X = params.Y`
+  alias, inside a `sh` step's own body: Jenkins substitutes that text as
+  literal shell input before invoking `/bin/sh`, so anyone able to
+  trigger a parameterized build controls part of the command the agent
+  runs. Regex-only, same two-independent-signals discipline as the IDOR/
+  CSRF checks below — there's no tree-sitter-groovy grammar in this
+  codebase, and Groovy's parenthesis-free `sh '''...'''` command syntax
+  wouldn't reach the generic AST/taint-lite sink matchers even if there were)
 - Unsafe Deserialization (`pickle.loads`, PHP `unserialize`, `yaml.load`,
   `node-serialize`)
 - Path Traversal / LFI (`include`, `fopen`, `open`, `send_file`,

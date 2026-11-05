@@ -289,3 +289,35 @@ entry below.
   its negative lookahead match a static literal anyway by letting the
   preceding `\s*` backtrack to zero width; fixed by moving the whitespace
   inside the lookahead itself.
+- ~~Jenkins declarative-pipeline build-parameter injection into a `sh`
+  step (Groovy/Jenkinsfile)~~ — added in v1.24.0 via
+  `jenkins_pipeline_guard.py`, see ARCHITECTURE.md and CAPABILITIES.md.
+  Found continuing the CyberSci audit into nationals-2025-26's
+  "deployment_hell" defence challenge: its Jenkins pipeline declares a
+  `string(name: 'projectName', ...)` build parameter, aliases it to an env
+  var (`env.PROJECT_NAME = params.projectName`), and interpolates that var
+  straight into a `sh '''...${PROJECT_NAME}...'''` step in both
+  `deploy-app.groovy` and `build-and-upload.groovy` — Jenkins substitutes
+  that text as literal shell input before invoking `/bin/sh`, so anyone
+  able to trigger a parameterized build gets command execution on the
+  agent. Zero coverage before this: flagmap had no Groovy/Jenkinsfile
+  language at all, AST or regex. Added as a regex-only, two-signal
+  whole-file check (declared parameter name, plus a reference to it or
+  its env-var alias inside an `sh` step's own body) rather than a 9th
+  AST-backed language — no `tree-sitter-groovy` grammar exists in this
+  codebase, and Groovy's parenthesis-free `sh '''...'''` command syntax
+  wouldn't reach the generic taint-lite sink matcher's `name\s*\(` pattern
+  even if there were. Caught and fixed two of its own bugs during
+  development: the `sh`-step regex's bare `\bsh\b` anchor first matched
+  the literal word "sh" wherever it appeared, including inside an
+  unrelated stage-name string ending in "...multi-line sh" immediately
+  before its own closing quote — fixed by anchoring to the start of a
+  trimmed line instead, which is how every real `sh` step is actually
+  written. And the variable-reference regex's `\$\{?(\w+)\}?` alternative
+  matched `${params.projectName}` as the literal word "params" (`\w+`
+  stops at the property-access dot), never reaching "projectName" at all
+  — fixed by adding an optional `(?:params\.)?` prefix inside that same
+  alternative. Verified zero false positives across every other
+  `.groovy` file in the full 4-snapshot corpus (`exfilAwsKeys.groovy`,
+  `pluginExport.groovy` ×2, `approveScripts.groovy`), and confirmed true
+  on both real vulnerable files.
