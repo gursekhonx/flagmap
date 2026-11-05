@@ -47,6 +47,10 @@ Ruby/Rails, Lua, Rust):
   fires, added v1.20.0, inside a file with no server-route signal
   anywhere — a plain browser `fetch()` call isn't SSRF at all; see
   `ssrf_fetch_guard.py` and ARCHITECTURE.md's "Best-effort heuristics" section)
+- JavaScript in an HTML page's inline `<script>` blocks (added v1.43.0, see
+  `inline_script.py`/ARCHITECTURE.md): bodies of inline JS script tags in
+  `.html`/`.htm` files are re-scanned with every JS rule at the page's real
+  line numbers — previously only `.js`/`.ts` files met those rules
 - Unrestricted File Upload (`move_uploaded_file`, Flask `.save()`, `multer()`
   with no extension/type allowlist; and — added v1.37.0, see
   ARCHITECTURE.md — a PHP destination path built by concatenating a

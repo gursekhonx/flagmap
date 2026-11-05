@@ -1,0 +1,15 @@
+<!-- Safe counterparts for inline_script.py: an external script (no inline
+     body), a non-JavaScript script type whose body is a template, prose
+     outside any script, and a constant-markup innerHTML assignment. -->
+<html>
+<body>
+<p>Set el.innerHTML = userInput to render it.</p>  // safe: Cross-Site Scripting (XSS) — DOM-based
+<script src="/static/app.js"></script>
+<script type="text/template">
+  <div>{{ name }}</div> el.innerHTML = tpl;  // safe: Cross-Site Scripting (XSS) — DOM-based
+</script>
+<script>
+  btn.innerHTML = 'Loading<span class="spinner"></span>';  // safe: Cross-Site Scripting (XSS) — DOM-based
+</script>
+</body>
+</html>

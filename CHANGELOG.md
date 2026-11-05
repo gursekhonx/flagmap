@@ -904,3 +904,31 @@ entry below.
   `prisma.$queryRaw` tagged `safe` cases); per-finding corpus diff: LA CTF
   195 → 165, exactly the 30 tagged-template lines removed, nothing else;
   CyberSci and all three DUCTF archives unchanged.
+- ~~JavaScript inside an HTML page's inline `<script>` blocks was never
+  matched against any JS rule~~ — added in v1.43.0, see ARCHITECTURE.md
+  and CAPABILITIES.md. From LA CTF 2025's public "mavs-fan" challenge,
+  whose whole client side is inline script in `public/post/post.html`:
+  `document.getElementById('post-content').innerHTML = post.message;` —
+  stored XSS the admin bot triggers. flagmap chooses one language per
+  file by extension, so `.html` files only ever met the "html" and
+  "generic" rules; the identical line in a `.js` file would have been
+  flagged. Added `inline_script.py`, which finds inline JavaScript script
+  bodies (skipping `src=` scripts and non-JS `type`s such as templates
+  and JSON) and re-scans them as "js" with the real path and real line
+  numbers (everything outside a script body is blanked to spaces, so even
+  columns line up). "generic" rules are left out of that second pass
+  because they already ran over the whole file. Surfacing inline JS also
+  surfaced a pre-existing precision gap in the DOM-XSS rule: it exempted
+  only `innerHTML = ""`, so constant markup like `btn.innerHTML =
+  'Loading<span class="spinner"></span>';` was flagged. It now exempts any
+  single complete string literal with no interpolation and nothing after
+  it but `;` or a comment — in `.js` files too. Verified: 235/235
+  regression (new `inline_script_vuln.html`/`_clean.html` fixtures:
+  the real shape; prose outside a script, a `text/template` body, and a
+  constant assignment as safe). Per-finding corpus diff: LA CTF 165 → 173
+  (all four mavs-fan inline sinks, plus two in each of two `solve.html`
+  files); DUCTF 2024 95 → 96 ("zoo-feedback-form" writes a server response
+  into `innerHTML`); CyberSci 392 → 393 — four new inline-script sinks
+  (history-stealer's upload rows, three templated maps in
+  factory_defaults) and three constant-markup assignments in `.js` files
+  correctly dropped.

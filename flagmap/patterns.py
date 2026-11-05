@@ -511,7 +511,16 @@ RAW_PATTERNS = [
     (
         "Cross-Site Scripting (XSS) — DOM-based",
         "js",
-        r"""\.innerHTML\s*=(?!\s*["'`]\s*["'`])""",
+        # (v1.43.0) the lookahead used to exempt only the empty string; it
+        # now exempts ANY single complete string literal with no
+        # interpolation and nothing after it but `;`/a comment —
+        # `btn.innerHTML = 'Loading<span class="spinner"></span>';` is a
+        # constant and can never carry attacker input. Surfaced when
+        # inline_script.py started feeding inline <script> bodies through
+        # this rule (spinner/placeholder markup in CyberSci's
+        # "gitgoodgemma" and "factory_defaults" pages, LA CTF 2024
+        # "terms-and-conditions"), but it applies equally to .js files.
+        r"""\.innerHTML\s*=(?!\s*(?:"[^"\\]*"|'[^'\\]*'|`[^`$\\]*`)\s*;?\s*(?://.*)?$)""",
         "medium",
         ".innerHTML assigned from a non-literal value — if it traces back to the URL, a form, or an API "
         "response, this is DOM-based XSS.",

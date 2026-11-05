@@ -2245,6 +2245,60 @@ LA CTF 195 → 165, exactly those 30 lines and nothing else; CyberSci and
 DUCTF 2023/2024/2025 unchanged, so no previously-real JS SQL finding was
 lost.
 
+**Inline `<script>` blocks are JavaScript (`inline_script.py`, v1.43.0)**:
+from LA CTF 2025's public "mavs-fan" challenge, a stored-XSS-plus-admin-bot
+app whose entire client side is inline script in `public/post/post.html`:
+
+```html
+<script>
+  ...
+  const post = await response.json();
+  document.getElementById('post-content').innerHTML = post.message;
+</script>
+```
+
+The solve is a one-line `<img src=x onerror=...>` post. flagmap picks one
+language per file, by extension: `.html` → "html", so a page was matched
+against the CSRF/form rules and the "generic" ones, and no JS rule
+(`.innerHTML =`, `eval(`, `document.write(`, ...) ever saw its inline code.
+The same line in a `.js` file has been caught since v1.0.
+
+`inline_script.py` mirrors `heredoc.py`'s approach — extract source that
+the extension walk can't see, and hand it to `scanner.scan_lines()` — with
+one difference: it keeps the *real* path and *real* line numbers. It finds
+each `<script ...>` / `</script>` pair over the whole file text, keeps only
+bodies whose tag has no `src=` and either no `type` or a JavaScript one
+(`text/javascript`, `module`, `application/javascript`, ...), and replaces
+every other character with a space (newlines kept). A finding therefore
+points at the exact line and column in the `.html` file. Non-JS bodies —
+`text/template`, `application/json`, `ld+json`, Handlebars — are skipped
+because their bodies aren't code. The second pass is given only the "js"
+rules: "generic" ones already ran over the whole file.
+
+Running inline JavaScript through the DOM-XSS rule exposed a pre-existing
+precision gap in that rule: its lookahead exempted only the empty string,
+so placeholder markup like `btn.innerHTML = 'Recovering<span
+class="spinner"></span>';` (several in CyberSci's "gitgoodgemma" and
+"factory_defaults" pages, LA CTF 2024's "terms-and-conditions") was
+reported as possible XSS. A complete string literal with no `${...}` and
+nothing after it but `;`/a comment is a constant and can't carry input, so
+the lookahead now exempts that shape — for `.js` files as well, which is
+where the three removals in the CyberSci diff come from.
+
+Per-finding corpus diff, every new line reviewed by hand: LA CTF 165 → 173
+(four "mavs-fan" sinks including the intended `post.message` one, plus
+two each in two solve pages); DUCTF 2024 95 → 96 ("zoo-feedback-form"
+writes the XML endpoint's response straight into `innerHTML`); CyberSci
+392 → 393 = +4 inline sinks that build markup from data (`row.innerHTML =
+\`...\`` over uploaded filenames in "history-stealer", three `.map(...)`
+renders in "factory_defaults") and −3 constant-markup assignments in
+`.js` files. DUCTF 2023/2025 unchanged. Fixtures:
+`tests/fixtures/js/inline_script_vuln.html` (the real shape) and
+`_clean.html` (prose mentioning `innerHTML` outside any script, a
+`text/template` body, a constant assignment). HTML fixture markers use
+`// safe:` rather than an HTML comment, because the harness's marker
+regex would otherwise capture the trailing `-->` into the vuln name.
+
 `report_md.py` deliberately has no fixture category of its own: it's a
 pure renderer over `Finding`/`Chain` objects the regression suite above
 already exercises and validates, with no detection logic of its own to

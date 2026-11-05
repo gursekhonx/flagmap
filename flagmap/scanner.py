@@ -19,6 +19,7 @@ from .ssrf_fetch_guard import filter_clientside_js_false_ssrf
 from .log_message_guard import filter_log_message_false_positive
 from .config_scanner import scan_config_path
 from .heredoc import iter_heredoc_sources
+from .inline_script import iter_inline_scripts
 from .loot import find_loot
 from .deps import find_vulnerable_deps
 from .xxe_guard import filter_guarded_xxe
@@ -632,6 +633,16 @@ def scan_path(root: str) -> List[Finding]:
     # out and run it through the exact same line-matching pipeline.
     for synthetic_path, lang, lines in iter_heredoc_sources(root):
         all_findings.extend(scan_lines(synthetic_path, lang, lines, patterns))
+
+    # Inline <script> blocks in .html/.htm files: the extension-based walk
+    # above only ever matches those files against "html" + "generic" rules,
+    # so no JavaScript rule (.innerHTML =, eval(, ...) ever saw inline JS.
+    # Re-scan just the script bodies as "js" — real path, real line numbers
+    # (inline_script.py blanks everything else). "generic" rules are left
+    # out of this pass: they already ran over the whole file above.
+    js_only = [p for p in patterns if p["language"] == "js"]
+    for html_path, lang, lines in iter_inline_scripts(root):
+        all_findings.extend(scan_lines(html_path, lang, lines, js_only))
 
     # separate pass: config/infra misconfigurations (Dockerfile, nginx.conf,
     # .env, vsftpd.conf, etc.) — these aren't "source code" so they're not

@@ -1,0 +1,14 @@
+<!-- Fixture for inline_script.py (v1.43.0): JavaScript inside an HTML
+     page's inline <script> must be matched against the "js" rules, at the
+     page's real line numbers. Mirrors LA CTF 2025 "mavs-fan" post.html. -->
+<html>
+<body>
+<div id="post-content"></div>
+<script>
+  async function load(postId) {
+    const post = await (await fetch(`/api/post/${postId}`)).json();
+    document.getElementById('post-content').innerHTML = post.message;  // ruleid: Cross-Site Scripting (XSS) — DOM-based
+  }
+</script>
+</body>
+</html>
