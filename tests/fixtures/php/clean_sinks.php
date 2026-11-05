@@ -75,6 +75,12 @@ function readFileSafeCast() {
     fopen($fname, "r");  // safe: Path Traversal / LFI
 }
 
+function serveAudioSafe() {
+    // readfile() on a fixed, non-tainted path — the new sink entry must
+    // not fire just because readfile() appears somewhere in the file.
+    readfile('audio/fixed-track.mp3');  // safe: Path Traversal / LFI
+}
+
 function sqlConstructNoVariableSafe() {
     // sql_construct.py's other gate: a SQL-shaped string built via "."
     // concatenation is fine when every operand is itself a string literal

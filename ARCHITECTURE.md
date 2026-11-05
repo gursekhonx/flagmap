@@ -1844,6 +1844,71 @@ convention, unlike the whole-file guard modules above): the real
 hostname-only shape, and a safe counterpart whose check compares
 `.protocol` as well as `.hostname` on the same line.
 
+**PHP `readfile()` missing from the AST taint engine's sink table
+(`ast_engine.py`, v1.34.0)**: from DownUnderCTF 2024's public "sniffy"
+web challenge (`src/audio.php`):
+
+```php
+$file = 'audio/' . $_GET['f'];
+if (!file_exists($file)) { http_response_code(404); die; }
+$mime = mime_content_type($file);
+if (!$mime || !str_starts_with($mime, 'audio')) { http_response_code(403); die; }
+header("Content-Type: $mime");
+readfile($file);
+```
+
+`$file` is correctly identified as tainted — the assignment line itself
+contains `$_GET['f']` — but `readfile()`, PHP's standard way to stream a
+file's contents straight to the response (exactly the "serve this
+static asset" shape an LFI challenge is built around), simply wasn't a
+key in `ast_engine.py`'s PHP `SINKS` table at all. Several statements
+later, the correctly-tainted `$file` reached this call and nothing fired.
+
+The `mime_content_type()` check in between is an insufficient
+allowlist, not a path-containment check — it validates the file's
+*content*, not its path. The real challenge's own `solve.py` exploits
+exactly that gap: it writes `'M.K.' * 300` into the PHP session (via the
+`theme` GET parameter, which the app stores verbatim into `$_SESSION`),
+engineering the resulting session file's bytes to contain the magic
+signature `mime_content_type()`'s libmagic backend recognizes as a
+ProTracker audio-module file, then reads that same session file —
+`../../../../tmp/sess_<id>`, PHP's well-known default session path —
+through this exact `readfile()` to leak the flag stored in
+`$_SESSION['flag']`. That specific bypass (poisoning file content to
+fool a MIME sniffer) is a content-sniffing technique, not something a
+source-level static scanner could reasonably model; the generalizable,
+catchable half of this bug is simply "a tainted path reaches
+`readfile()` with no path-containment check" — which is what this fix
+addresses, independent of how the MIME check happens to get bypassed.
+
+First attempted by adding `"readfile"` to `taint.py`'s legacy regex-
+based PHP `SINKS` table (the one documented as covering "languages not
+yet ported to the AST engine: Go, Java, Ruby, Lua, Rust"). Testing
+against the real file showed zero effect — a reminder that PHP *is*
+AST-supported, so `scanner.py`'s `if language in AST_SUPPORTED_LANGUAGES`
+branch always routes `.php` files through `ast_engine.py` instead,
+making the `taint.py` edit dead code for this language. Reverted that
+edit and added the entry to `ast_engine.py`'s own, separate PHP `SINKS`
+dict instead (same `("Path Traversal / LFI", "arg0", "tainted")` shape
+as the neighboring `fopen` entry).
+
+Verified against both corpora: CyberSci's finding count is unchanged
+(392, confirmed by `git stash` diff — no file in that archive has a
+tainted variable reaching `readfile()`), and the full DownUnderCTF
+2024+2025 archive goes from 94 to 95 — exactly the one real hit.
+Self-scanning `ast_engine.py` came back clean (0 findings) — unsurprising
+since the new table entry and its comment are PHP-keyed text inside a
+`.py` file, never evaluated against Python-language patterns, the same
+language-gating that protected the earlier Open Redirect rule's
+self-referential comment.
+
+Added fixtures to `tests/fixtures/php/vuln_sinks.php`/`clean_sinks.php`:
+the real cross-statement shape (path concatenated on one line,
+`readfile()` several lines later, through an unrelated `file_exists()`
+check in between — proving this needs the AST engine's cross-statement
+taint tracking, not a same-line regex), and a safe counterpart calling
+`readfile()` on a fixed literal path.
+
 `report_md.py` deliberately has no fixture category of its own: it's a
 pure renderer over `Finding`/`Chain` objects the regression suite above
 already exercises and validates, with no detection logic of its own to

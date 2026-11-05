@@ -708,3 +708,43 @@ entry below.
   evaluated against it). Added fixtures to `tests/fixtures/js/
   vuln_sinks.js`/`clean_sinks.js`: the real hostname-only shape, and a
   safe counterpart that also compares `.protocol` on the same line.
+- ~~PHP `readfile()` missing from the AST taint engine's sink table~~ —
+  added in v1.34.0, see ARCHITECTURE.md. From DownUnderCTF 2024's public
+  "sniffy" web challenge (`src/audio.php`):
+  ```php
+  $file = 'audio/' . $_GET['f'];
+  if (!file_exists($file)) { http_response_code(404); die; }
+  $mime = mime_content_type($file);
+  if (!$mime || !str_starts_with($mime, 'audio')) { http_response_code(403); die; }
+  header("Content-Type: $mime");
+  readfile($file);
+  ```
+  `$file` is correctly identified as tainted (the assignment line itself
+  contains `$_GET['f']`), but `readfile()` — PHP's standard way to stream
+  a file straight to the response, exactly the "serve this static asset"
+  shape an LFI challenge is built around — simply wasn't in
+  `ast_engine.py`'s PHP `SINKS` table at all, so flagmap reported nothing
+  despite correctly tainting the variable. (The MIME-type check in
+  between is an insufficient allowlist, not a path-containment check —
+  the challenge's own solve script bypasses it by poisoning the PHP
+  session file's own content with repeated `M.K.` bytes, a ProTracker
+  module-file magic signature, so `mime_content_type()` reports the
+  session file itself as an audio type. That bypass technique is content-
+  sniffing-specific and not something a source-level static scanner
+  could reasonably model; the generalizable, catchable half of this bug
+  is simply "tainted path reaches `readfile()`", which is what this fix
+  addresses.) First discovered by adding `"readfile"` to `taint.py`'s
+  legacy regex-based PHP `SINKS` table, which turned out to be dead code
+  for this file: PHP is AST-supported, so `scanner.py` always runs
+  `ast_engine.py` instead of `taint.py` for `.php` files (confirmed zero
+  effect, then reverted) — the fix had to go in `ast_engine.py`'s own,
+  separate PHP `SINKS` table instead. Verified against both corpora:
+  CyberSci's finding count is unchanged (392, confirmed by git-stash
+  diff — no file in that archive has a tainted variable reaching
+  `readfile()`), and the full DownUnderCTF 2024+2025 archive goes from
+  94 to 95 — exactly the one real hit. Self-scan of `ast_engine.py` came
+  back clean. Added fixtures to `tests/fixtures/php/vuln_sinks.php`/
+  `clean_sinks.php`: the real cross-statement shape (concatenated path,
+  `readfile()` several lines later, through an unrelated `file_exists()`
+  check in between), and a safe counterpart calling `readfile()` on a
+  fixed literal path.

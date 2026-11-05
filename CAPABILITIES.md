@@ -33,7 +33,9 @@ Ruby/Rails, Lua, Rust):
 - Unsafe Deserialization (`pickle.loads`, PHP `unserialize`, `yaml.load`,
   `node-serialize`)
 - Path Traversal / LFI (`include`, `fopen`, `open`, `send_file`,
-  `readFileSync`, etc. fed from user input)
+  `readFileSync`, etc. fed from user input; and — added v1.34.0, see
+  ARCHITECTURE.md — PHP's `readfile()`, tracked through the AST taint
+  engine's cross-statement tracking the same way `fopen()` already was)
 - Server-Side Template Injection / SSTI (`render_template_string`, EJS,
   Handlebars, Nunjucks)
 - SSRF (`requests`/`urlopen`/`pycurl` in Python, `axios`/`fetch`/`http.get` in

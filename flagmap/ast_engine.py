@@ -404,6 +404,26 @@ SINKS = {
         "passthru": ("Command Injection", "arg0", "tainted"),
         "popen": ("Command Injection", "arg0", "tainted"),
         "fopen": ("Path Traversal / LFI", "arg0", "tainted"),
+        # readfile() — found missing from this table via a real
+        # DownUnderCTF 2024 web challenge, "sniffy" (src/audio.php):
+        # `$file = 'audio/' . $_GET['f']; ... readfile($file);`. $file is
+        # correctly tainted (the assignment line itself contains
+        # `$_GET['f']`), but readfile — PHP's standard way to stream a
+        # file's contents straight to the response, exactly the "serve
+        # this static asset" shape an LFI challenge is built around —
+        # simply wasn't in this sink table, so the tainted variable was
+        # never checked against any sink several lines later where it was
+        # actually used. A mime_content_type()-based "only audio files"
+        # check sits between the assignment and this sink in the real
+        # file, but that's an insufficient allowlist (bypassable by
+        # crafting file CONTENT a MIME sniffer misreads as audio — the
+        # real challenge's own solve script does exactly this), not a
+        # path-containment check, so the underlying LFI primitive is real
+        # regardless — this engine doesn't try to model whether an
+        # unrelated check elsewhere would stop real-world exploitation,
+        # only whether tainted input reaches a dangerous sink unsanitized,
+        # same as every other sink entry in this table.
+        "readfile": ("Path Traversal / LFI", "arg0", "tainted"),
         "unserialize": ("Unsafe Deserialization", "arg0", "tainted"),
         "eval": ("Command Injection / RCE", "arg0", "tainted"),
         # ext/ldap: ldap_search/ldap_list/ldap_read all share the

@@ -38,6 +38,19 @@ function loadData() {
     unserialize($data);  // ruleid: Unsafe Deserialization
 }
 
+function serveAudio() {
+    // Mirrors DownUnderCTF 2024's real "sniffy" web challenge
+    // (src/audio.php) almost verbatim: a tainted path concatenated one
+    // line, then streamed with readfile() several lines later — must be
+    // caught by cross-statement AST taint tracking, not a same-line regex.
+    $file = 'audio/' . $_GET['f'];
+    if (!file_exists($file)) {
+        http_response_code(404);
+        return;
+    }
+    readfile($file);  // ruleid: Path Traversal / LFI
+}
+
 function calc() {
     $expr = $_GET['expr'];
     eval($expr);  // ruleid: Command Injection / RCE
