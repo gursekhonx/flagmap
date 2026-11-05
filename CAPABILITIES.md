@@ -18,7 +18,9 @@ Ruby/Rails, Lua, Rust):
   added v1.15.0, see `sql_construct.py` and ARCHITECTURE.md — a query built
   via "." concatenation or inline interpolation spanning multiple physical
   lines, independent of patterns.py's single-line regexes)
-- Command Injection / RCE (`system`, `exec`, `eval`, `shell_exec`, etc., and
+- Command Injection / RCE (`system`, `exec`, `eval`, `shell_exec`, etc.; a JS
+  command string built by template-literal interpolation on one line and
+  `exec()`'d on another — v1.59.0, `shell_template_guard.py`; and
   — added v1.24.0, Groovy/Jenkinsfile only, best-effort, see
   `jenkins_pipeline_guard.py` and ARCHITECTURE.md's "Best-effort
   heuristics" section — a Jenkins declarative pipeline's own `string`

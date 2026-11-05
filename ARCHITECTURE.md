@@ -2834,6 +2834,33 @@ Per-finding corpus diff: UofTCTF +1 (`db.js:61`) and LA CTF +1 — 2026
 typist add keys, but only to their own request, so it's a correct match
 with no impact in that challenge. CyberSci and DUCTF unchanged.
 
+**Shell command built on one line, `exec()`'d on another
+(`shell_template_guard.py`, v1.59.0)**: from UofTCTF 2024's public
+"Voice Changer" challenge (`src/index.js`):
+
+```js
+req.busboy.on('field', (fieldname, val) => { formData[fieldname] = val; });
+...
+const command = `ffmpeg -i "${__dirname + '/upload/' + fileName}" -y -af "asetrate=44100*${formData.pitch},aresample=44100,atempo=1/${formData.pitch}" "${__dirname + '/output/' + fileName}"`
+exec(command, (error, stdout, stderr) => { ... })
+```
+
+`pitch` is a multipart form field; the solve sets it to a backtick
+command substitution and reads the result from ffmpeg's error output.
+The JS command-injection regex needs the template literal inside the
+`exec(` call, and the AST engine has no source for busboy's `field`
+events, so nothing fired.
+
+Two whole-file signals: a `const|let|var X = `...`` template literal with
+at least one `${...}` whose expression isn't plainly server-side
+(`__dirname`, `__filename`, `process.env.X`, a number, a quoted literal —
+so a backup command over `${__dirname}/data` stays quiet), and `exec(X` /
+`execSync(X` with that variable first. `execFile` and `spawn` without a
+shell aren't matched. Fires on the exec line, "high"/"possible": the
+guard proves a non-constant value reached a shell string, not that the
+value is attacker-controlled. Per-finding corpus diff: UofTCTF +1
+(`index.js:41`), nothing else anywhere.
+
 `report_md.py` deliberately has no fixture category of its own: it's a
 pure renderer over `Finding`/`Chain` objects the regression suite above
 already exercises and validates, with no detection logic of its own to

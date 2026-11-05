@@ -36,6 +36,7 @@ from .aead_decipher_guard import find_aead_decipher_issues, AEAD_LANGUAGES
 from .store_html_xss_guard import find_store_html_xss, STORE_XSS_LANGUAGES
 from .signed_cookie_guard import find_signed_cookie_json, SIGNED_COOKIE_LANGUAGES
 from .orm_where_guard import find_orm_where_injection, ORM_WHERE_LANGUAGES
+from .shell_template_guard import find_shell_template_exec, SHELL_TEMPLATE_LANGUAGES
 
 # No hand-written vulnerable application code is ever a single line this long —
 # only minified/bundled vendor files (tailwindcss.js, jquery.min.js, etc.) are,
@@ -728,6 +729,30 @@ def scan_lines(path: str, language: str, lines: List[str], patterns: list) -> Li
                 payload="?author[password][startsWith]=a (or [gte]=a with a binary search) — extend one "
                         "character at a time while results still come back.",
                 confidence="likely",
+            ))
+
+    # A shell command built by template-literal interpolation on one line
+    # and passed to exec()/execSync() on another. See
+    # shell_template_guard.py's module docstring.
+    if language in SHELL_TEMPLATE_LANGUAGES:
+        for sf in find_shell_template_exec(path, language, lines):
+            key = (sf.line_no, "Command Injection")
+            if key in seen:
+                continue
+            seen.add(key)
+            findings.append(Finding(
+                file=sf.file,
+                line_no=sf.line_no,
+                line_text=sf.line_text,
+                vuln_name="Command Injection",
+                severity="high",
+                why="This exec()/execSync() runs a command string that was built earlier with template-literal "
+                    "interpolation of a non-constant value. exec() hands the string to /bin/sh, so if that value "
+                    "comes from the request (a form field, a multipart field, a filename), shell syntax in it "
+                    "runs: backticks, $(...), ;, &&.",
+                payload="Put `id` or $(id) (or ;id;) in whichever request field ends up in the interpolated "
+                        "value.",
+                confidence="possible",
             ))
 
     return findings

@@ -1184,3 +1184,19 @@ entry below.
   +1 — 2026 "glotq"'s browser script builds its request body the same
   way, a true instance of the shape though only self-affecting there;
   CyberSci and DUCTF unchanged; `patterns.py` self-scan unchanged at 8.
+- ~~JS shell command built by interpolation on one line, `exec()`'d on
+  another~~ — added in v1.59.0, see ARCHITECTURE.md and CAPABILITIES.md.
+  From UofTCTF 2024's public "Voice Changer" challenge: `const command =
+  `ffmpeg ... asetrate=44100*${formData.pitch} ...``, then
+  `exec(command, ...)`. `formData` comes from busboy multipart `field`
+  events, which no taint source models, and the existing regex only
+  matched a template literal written inside the `exec(` call. Added
+  `shell_template_guard.py`: a variable assigned a template literal with
+  at least one interpolation that isn't plainly server-side
+  (`__dirname`, `__filename`, `process.env.*`, a number or a quoted
+  literal), later passed as `exec`/`execSync`'s first argument. "possible",
+  since without taint it shows only that a value was pasted into a shell
+  string. Verified: 293/293 regression (clean: only `__dirname`
+  interpolated; `execFile` with an argument array); per-finding corpus
+  diff: UofTCTF +1, the real line; nothing else in any corpus; guard and
+  `scanner.py` self-scan clean.
