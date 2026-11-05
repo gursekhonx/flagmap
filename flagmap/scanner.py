@@ -28,6 +28,7 @@ from .jenkins_pipeline_guard import find_jenkins_param_injection, GROOVY_LANGUAG
 from .zipslip_guard import find_zip_slip, ZIP_LANGUAGES
 from .jsp_cookie_xss_guard import find_jsp_cookie_xss, JSP_EXTENSIONS
 from .class_pollution_guard import find_class_pollution, CLASS_POLLUTION_LANGUAGES
+from .forin_prefix_pollution_guard import find_forin_prefix_pollution, FORIN_PREFIX_LANGUAGES
 
 # No hand-written vulnerable application code is ever a single line this long —
 # only minified/bundled vendor files (tailwindcss.js, jquery.min.js, etc.) are,
@@ -528,6 +529,38 @@ def scan_lines(path: str, language: str, lines: List[str], patterns: list) -> Li
                     "overwrite arbitrary module globals (sometimes called \"class pollution\", the Python "
                     "analog of JS prototype pollution) if the merged-in dict ever comes from request data.",
                 payload="{\"__class__\": {\"__init__\": {\"__globals__\": {\"SOME_GLOBAL\": \"polluted\"}}}}",
+                confidence="possible",
+            ))
+
+    # best-effort JS/TS "prefix-filtered for...in key, stripped and
+    # written straight into a bracket assignment" Prototype Pollution —
+    # a different shape of the same vuln name as the two JS rules above
+    # (no library merge call, no recursion): a for...in loop variable
+    # checked with .startsWith(), stripped with .slice(), and the result
+    # used as a bracket-assignment key with no __proto__/constructor
+    # denylist. See forin_prefix_pollution_guard.py's module docstring.
+    if language in FORIN_PREFIX_LANGUAGES:
+        for ff in find_forin_prefix_pollution(path, language, lines):
+            key = (ff.line_no, "Prototype Pollution")
+            if key in seen:
+                continue
+            seen.add(key)
+            findings.append(Finding(
+                file=ff.file,
+                line_no=ff.line_no,
+                line_text=ff.line_text,
+                vuln_name="Prototype Pollution",
+                severity="high",
+                why="This bracket assignment writes a property whose NAME comes from a for...in loop "
+                    "variable that was filtered with .startsWith() and then stripped with .slice() — a "
+                    "hand-rolled \"flatten a prefixed/namespaced set of keys\" idiom with no denylist on "
+                    "__proto__/constructor/prototype. for...in walks every enumerable property NAME of the "
+                    "source object, including one an attacker named e.g. \"prefix.__proto__\" in a JSON "
+                    "request body; after the prefix is stripped, \"__proto__\" survives untouched and lands "
+                    "as a literal bracket-assignment key, polluting Object.prototype for the whole process.",
+                payload="Send a property named with this prefix followed by \"__proto__\", e.g. "
+                        "{\"prefix.__proto__\": {\"polluted\": true}}, adjusting \"prefix\" to the real "
+                        "prefix constant this code checks for.",
                 confidence="possible",
             ))
 

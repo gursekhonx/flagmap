@@ -595,3 +595,65 @@ entry below.
   `clean_sinks.js`) mirroring the real mixed-family case plus two
   single-family negatives, since no dedicated fixture coverage existed
   yet for this corner of the JWT rule family at all.
+- ~~JS/TS Prototype Pollution via a prefix-filtered `for...in` key,
+  stripped and bracket-assigned with no `__proto__`/`constructor`
+  denylist~~ — added in v1.32.0, see ARCHITECTURE.md and
+  CAPABILITIES.md. From DownUnderCTF 2024's public "prisoner-processor"
+  web challenge (`src/app/src/index.ts`):
+  ```ts
+  const getSignedData = (data: any): any => {
+    const signedParams: any = {};
+    for (const param in data) {
+      if (param.startsWith(SIGNED_PREFIX)) {
+        const keyName = param.slice(SIGNED_PREFIX.length);
+        signedParams[keyName] = data[param];
+      }
+    }
+    return signedParams;
+  };
+  ```
+  `for...in` walks every enumerable property NAME of `data`, including
+  one an attacker names `"signed.__proto__"` in their JSON body. This
+  function filters by the literal `"signed."` prefix, strips it with
+  `.slice()`, and bracket-assigns the result onto a fresh plain object
+  with zero check against `__proto__`/`constructor`/`prototype` —
+  `signedParams["__proto__"] = ...` pollutes `Object.prototype` process-
+  wide. The challenge's own writeup uses exactly this to bypass this
+  function's sibling signature check, since `Object.entries()` (used to
+  compute the HMAC) never enumerates inherited properties the way
+  `for...in` does. `patterns.py` already had two JS Prototype Pollution
+  rules — a deep-merge library call, and a hand-rolled RECURSIVE merge
+  whose own `key in target` guard is itself the gadget — but neither
+  matches this file: no library call, no recursion, just a flat loop, a
+  prefix filter, a strip, and a bracket write.
+
+  Added `forin_prefix_pollution_guard.py`, filed under the same
+  `"Prototype Pollution"` vuln name. An early design only required a
+  `for...in` loop plus a bracket-assignment using the loop variable (or
+  a simple derived alias) — rejected during development once it was
+  tested against the ordinary `for (const k in obj) { out[k] =
+  obj[k]; }` shallow-copy idiom, an extremely common, completely benign
+  pattern that it would have flagged constantly. Narrowed instead to
+  four required signals, one more than this project's usual two-to-
+  three: (1) a `for (const/let/var V in ...)` loop; (2) a
+  `V.startsWith(...)` prefix check on that loop variable anywhere in the
+  file; (3) a variable `K` declared as `V.slice(...)` (the prefix-
+  stripped name); (4) a bracket assignment `obj[K] = ...` elsewhere using
+  that exact derived variable. This "filter by prefix, strip it, use the
+  bare suffix as a brand-new property name" idiom is rare outside this
+  specific "flatten a namespaced set of fields" pattern, unlike a bare
+  copy loop. Verified against both corpora: CyberSci's finding count is
+  unchanged (392 — no file in that archive has this four-signal
+  combination, confirming the narrower design doesn't just trade one
+  false-positive source for another), and the full DownUnderCTF
+  2024+2025 archive goes from 92 to 93 — exactly the one real hit, with
+  the two pre-existing, unrelated class-pollution hits (`co2`/`co2v2`)
+  still present and unchanged alongside it. Self-scan of the new module
+  and `scanner.py` came back clean. Added dedicated fixtures
+  (`tests/fixtures/js/forin_prefix_pollution_vuln.ts`/`clean.ts`, same
+  isolated-file convention as `jsp_cookie_xss_*.jsp`/
+  `class_pollution_*.py`, since this is a whole-file check): the real
+  shape, plus three negatives each missing exactly one of the four
+  signals — proving every one of them is load-bearing, including the
+  ordinary shallow-copy loop that motivated narrowing the design in the
+  first place.

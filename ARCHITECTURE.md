@@ -1687,6 +1687,87 @@ challenge's exact shape (`ruleid`), plus two single-family negatives
 (`['RS256']` alone, `["HS256", "HS512"]` alone) proving the rule needs
 both families present, not just any `algorithms` array at all.
 
+**Prototype Pollution via a prefix-filtered `for...in` key
+(`forin_prefix_pollution_guard.py`, v1.32.0)**: from DownUnderCTF 2024's
+public "prisoner-processor" web challenge (`src/app/src/index.ts`):
+
+```ts
+const getSignedData = (data: any): any => {
+  const signedParams: any = {};
+  for (const param in data) {
+    if (param.startsWith(SIGNED_PREFIX)) {
+      const keyName = param.slice(SIGNED_PREFIX.length);
+      signedParams[keyName] = data[param];
+    }
+  }
+  return signedParams;
+};
+```
+
+`for...in` walks every enumerable property NAME of `data`, including
+one an attacker names `"signed.__proto__"` in their JSON body. This
+function filters names by the literal `"signed."` prefix, strips it
+with `.slice()`, and bracket-assigns the stripped result onto a fresh
+plain object with no check against `__proto__`/`constructor`/
+`prototype` at all — a request key named `"signed.__proto__"` survives
+the filter and becomes `signedParams["__proto__"] = ...`, polluting
+`Object.prototype` process-wide. The challenge's own writeup exploits
+exactly this to bypass this function's sibling signature check:
+`getSignature()` hashes `Object.entries(data)`, which never enumerates
+inherited properties, so the injected key is invisible to the signature
+check but fully honored by this `for...in` loop.
+
+`patterns.py` already had two JS Prototype Pollution rules — one for a
+deep-merge library call (`_.merge`/`deepmerge({}, req.body)`), one for a
+hand-rolled RECURSIVE merge whose own `key in target` guard is itself
+the gadget (walks the prototype chain, so it's not a real guard) —
+neither matches this file: there's no library call and no recursion,
+just a flat loop, a prefix filter, a strip, and a bracket write.
+
+The obvious first design — a `for...in` loop plus a bracket-assignment
+using the loop variable (or a simple derived alias) — was tried and
+rejected during development: tested against the ordinary `for (const k
+in obj) { out[k] = obj[k]; }` shallow-copy idiom, which is extremely
+common and completely benign, it fired on it immediately, confirming
+that signal pair alone is a false-positive generator. Narrowed instead
+to four required signals (one more than this project's usual two-to-
+three, specifically because the simpler version self-tested as noisy):
+(1) a `for (const/let/var V in ...)` loop; (2) a `V.startsWith(...)`
+prefix check on that loop variable, anywhere in the file; (3) a variable
+`K` declared as `V.slice(...)` — the prefix-stripped name; (4) a bracket
+assignment `obj[K] = ...` elsewhere using that exact derived variable.
+"Filter by a literal prefix, strip it, use the bare suffix as a new
+property name" is a recognizable, comparatively rare idiom (a
+hand-rolled "flatten a namespaced set of fields" pattern), unlike a bare
+copy loop — which is exactly why it was still worth a dedicated check
+once narrowed this far, rather than discarding the finding as
+unfixable noise. Same accepted trade as `class_pollution_guard.py`
+(the Python analog of this same underlying bug): no attempt to detect a
+denylist check on `K` elsewhere in the file, on the theory that a
+hand-rolled prefix-strip-and-copy loop written this way is rarely paired
+with a complete, correct denylist in practice.
+
+Verified against both corpora. CyberSci: finding count unchanged (392)
+— no file in that archive has all four signals together, confirming the
+narrower four-signal design doesn't just trade one false-positive source
+for a subtler one. DownUnderCTF 2024+2025: total goes from 92 to 93,
+exactly the one real hit, with the two pre-existing, unrelated
+class-pollution hits (`co2`/`co2v2`) still present and unchanged
+alongside it. Self-scan of the new module and `scanner.py` came back
+clean (0 findings).
+
+Added dedicated, isolated fixture files — same convention as
+`jsp_cookie_xss_*.jsp`/`class_pollution_*.py`, since this is a
+whole-file check rather than a single-line regex —
+`tests/fixtures/js/forin_prefix_pollution_vuln.ts` (the real shape) and
+`forin_prefix_pollution_clean.ts` (three negatives, each missing exactly
+one of the four signals: a bare shallow-copy loop with no prefix filter
+at all; a prefix check with no `.slice()`-derived variable or bracket
+write; and a `.slice()`-derived variable that's only ever pushed into an
+array, never bracket-assigned). All three must produce zero findings —
+the first of them is the exact shape that sank the simpler two-signal
+design during development.
+
 `report_md.py` deliberately has no fixture category of its own: it's a
 pure renderer over `Finding`/`Chain` objects the regression suite above
 already exercises and validates, with no detection logic of its own to

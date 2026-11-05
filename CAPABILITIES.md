@@ -89,7 +89,13 @@ Ruby/Rails, Lua, Rust):
   `__class__` → `__init__` → `__globals__` to overwrite arbitrary module
   globals. Filed under this same vuln name since it's the identical
   construct in a different language — see the hand-rolled-merge JS bullet
-  further below for that language's version)
+  further below for that language's version; and — added v1.32.0, see
+  `forin_prefix_pollution_guard.py`/ARCHITECTURE.md — a third shape: a
+  `for...in` loop variable filtered with `.startsWith(prefix)`, stripped
+  with `.slice()`, and bracket-assigned onto a fresh object with no
+  `__proto__`/`constructor` denylist, a hand-rolled "flatten a
+  prefixed/namespaced set of keys" idiom distinct from both the
+  deep-merge-library and the recursive-merge shapes)
 - JWT / Auth Token Weaknesses (`verify=False`, `alg: none` accepted, missing
   algorithm allowlist; and — added v1.31.0, see ARCHITECTURE.md — the
   opposite problem: an algorithms allowlist that's present but mixes an
@@ -274,7 +280,10 @@ Ruby/Rails, Lua, Rust):
   (Python's version of this same hand-rolled-merge shape, via `setattr()`
   and `__class__`/`__globals__` instead of `__proto__`/`constructor`, is
   covered too — see the Prototype Pollution bullet above and
-  `class_pollution_guard.py`, v1.29.0)
+  `class_pollution_guard.py`, v1.29.0; a third, non-recursive JS shape —
+  a `for...in` loop variable filtered/stripped by a literal prefix and
+  bracket-assigned with no denylist at all — is covered too, see
+  `forin_prefix_pollution_guard.py`, v1.32.0)
 - Puppeteer/Playwright `page.goto()` fed a bare variable — SSRF via an
   admin/review bot visiting an attacker-chosen URL, a different API shape
   than HTTP-client SSRF (axios/requests/curl)
