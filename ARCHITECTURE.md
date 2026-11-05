@@ -2333,6 +2333,42 @@ the same release: the post-release self-scan of v1.43.0's
 `inline_script.py` found its docstring matching the generic `eval(`
 rule; reworded.
 
+**First-occurrence-only HTML escaping in JS (`patterns.py`, v1.45.0)**:
+from LA CTF 2026's public "job-board" challenge (`app.js`):
+
+```js
+// js translation of python's html.escape because ...
+function htmlEscape(s, quote=true) {
+  s = s.replace("&", "&amp;"); // Must be done first!
+  s = s.replace("<", "&lt;");
+  s = s.replace(">", "&gt;");
+  ...
+```
+
+A faithful-looking port with a language difference underneath: Python's
+`str.replace()` replaces every occurrence; JavaScript's
+`String.prototype.replace()` with a *string* pattern replaces only the
+first. Every page is built by `template.replace('NAME', htmlEscape(name))`,
+so the solve's application text opens with `<>&'"` — one of each — and the
+`<script>` after it is never escaped; the admin bot views the application.
+
+New single-line JS rule under "Cross-Site Scripting (XSS)": a `.replace(`
+whose first argument is a one-character string literal of `<`, `>`, `&`, or
+a quote, and whose second is an HTML entity (`&lt;`, `&#x27;`, ...). That
+second half ties it to escaping specifically. The correct forms —
+`.replace(/</g, ...)` and `.replaceAll("<", ...)` — don't match.
+"high"/"likely": there's no reading of this line where it escapes a
+second `<`.
+
+The per-finding corpus diff found a second real instance that wasn't part
+of the triage: LA CTF 2025 "old-site"'s Next.js guestbook API renders each
+stored message through `m.replace("&", "&amp;").replace("<",
+"&lt;").replace(">", "&gt;")` into a `text/html` response (that
+challenge's intended route was a dev-server sourcemap leak, but the XSS is
+real too). LA CTF 175 → 181 (five job-board lines, one old-site); all
+other corpora unchanged. Fixtures in the shared `vuln_sinks.js`/
+`clean_sinks.js`.
+
 `report_md.py` deliberately has no fixture category of its own: it's a
 pure renderer over `Finding`/`Chain` objects the regression suite above
 already exercises and validates, with no detection logic of its own to

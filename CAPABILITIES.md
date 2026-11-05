@@ -47,6 +47,9 @@ Ruby/Rails, Lua, Rust):
   fires, added v1.20.0, inside a file with no server-route signal
   anywhere — a plain browser `fetch()` call isn't SSRF at all; see
   `ssrf_fetch_guard.py` and ARCHITECTURE.md's "Best-effort heuristics" section)
+- HTML escaping in JavaScript via `.replace("<", "&lt;")` with a string
+  pattern (added v1.45.0, see ARCHITECTURE.md) — replaces only the first
+  occurrence, unlike Python's `str.replace`
 - Jinja2/Django `{{ value | safe }}` in template files (added v1.44.0, see
   ARCHITECTURE.md) — autoescaping explicitly switched off for that output
 - JavaScript in an HTML page's inline `<script>` blocks (added v1.43.0, see

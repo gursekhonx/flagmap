@@ -946,3 +946,20 @@ entry below.
   shapes; plain `{{ }}`, `|e`/`|urlencode`, and a filter whose name merely
   contains "safe" as safe); per-finding corpus diff: LA CTF 173 → 175,
   exactly the two templates; all other corpora unchanged.
+- ~~HTML escaping with JS `.replace("<", "&lt;")` (string pattern,
+  first occurrence only)~~ — added in v1.45.0, see ARCHITECTURE.md and
+  CAPABILITIES.md. From LA CTF 2026's public "job-board" challenge, whose
+  `htmlEscape()` is a line-by-line port of Python's `html.escape()` —
+  `s = s.replace("<", "&lt;")` and so on. JavaScript's `String.replace()`
+  with a string pattern replaces only the first occurrence, so the solve
+  payload starts with `<>&'"` and the `<script>` after it goes through
+  untouched. Added a single-line JS rule: `.replace(` with a one-character
+  HTML-special string literal and an entity as the replacement. `/g`
+  regexes and `replaceAll()` don't match. The corpus diff then turned up a
+  second real instance nobody had pointed at: LA CTF 2025 "old-site"'s
+  guestbook renders every stored message through
+  `.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")`.
+  Verified: 245/245 regression (three `ruleid` lines from the real shape;
+  `/&/g` and `replaceAll` as safe); per-finding corpus diff: LA CTF 175 →
+  181 (five job-board lines, one old-site line); every other corpus
+  unchanged; `patterns.py` self-scan unchanged at 8.

@@ -561,6 +561,28 @@ RAW_PATTERNS = [
         "possible",
     ),
     (
+        # Found in LA CTF 2026's public "job-board" web challenge (app.js),
+        # a hand-rolled port of Python's html.escape():
+        #     s = s.replace("&", "&amp;");
+        #     s = s.replace("<", "&lt;");
+        #     s = s.replace(">", "&gt;");
+        # In Python str.replace() replaces every occurrence; in JavaScript,
+        # String.prototype.replace() with a STRING pattern replaces only the
+        # FIRST one. The challenge's solve payload opens with `<>&'"` to
+        # use up each first occurrence, then the real <script> is untouched.
+        # The fix is a /g regex or replaceAll(), neither of which matches.
+        "Cross-Site Scripting (XSS)",
+        "js",
+        r"""\.replace\s*\(\s*(?:"(?:<|>|&|'|\\")"|'(?:<|>|&|"|\\')')\s*,\s*["'`]&(?:lt|gt|amp|quot|apos|#x?[0-9a-fA-F]+);?["'`]""",
+        "high",
+        "HTML escaping with String.prototype.replace() and a plain string pattern: in JavaScript that replaces "
+        "only the FIRST occurrence (unlike Python's str.replace). Any later <, >, &, or quote passes through "
+        "unescaped.",
+        "Start the input with one of each escaped character (e.g. <>&'\") to use up the single replacements, "
+        "then add the real payload: <>&'\"<img src=x onerror=alert(document.domain)>",
+        "likely",
+    ),
+    (
         "Cross-Site Scripting (XSS)",
         "php",
         r"""\b(?:echo|print)\s+\$\w+\[\s*['"]?\w+['"]?\s*\]\s*;""",

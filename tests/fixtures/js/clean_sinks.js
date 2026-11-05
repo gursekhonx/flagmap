@@ -69,3 +69,10 @@ const safeHits = await Files.find({ filename: { $regex: _.escapeRegExp(req.query
 const existing = sql`SELECT * FROM users WHERE username=${username}`;  // safe: SQL Injection
 const potentialUsers = await db`SELECT * FROM users WHERE username=${username}`;  // safe: SQL Injection
 const rows = await prisma.$queryRaw`SELECT * FROM users WHERE id=${id}`;  // safe: SQL Injection
+
+// Global replacement — /g regex or replaceAll — escapes every occurrence.
+function htmlEscapeSafe(s) {
+  s = s.replace(/&/g, "&amp;");  // safe: Cross-Site Scripting (XSS)
+  s = s.replaceAll("<", "&lt;");  // safe: Cross-Site Scripting (XSS)
+  return s;
+}

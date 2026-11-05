@@ -99,3 +99,11 @@ const hits = await Files.find({ filename: { $regex: req.query.search } });  // r
 
 // Untagged template literal building SQL — still SQL injection.
 const rawQuery = `SELECT * FROM users WHERE username=${username}`;  // ruleid: SQL Injection
+
+// First-occurrence-only HTML escaping — mirrors LA CTF 2026 "job-board".
+function htmlEscape(s) {
+  s = s.replace("&", "&amp;");  // ruleid: Cross-Site Scripting (XSS)
+  s = s.replace("<", "&lt;");  // ruleid: Cross-Site Scripting (XSS)
+  s = s.replace('\'', "&#x27;");  // ruleid: Cross-Site Scripting (XSS)
+  return s;
+}
