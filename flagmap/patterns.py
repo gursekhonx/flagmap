@@ -238,6 +238,31 @@ RAW_PATTERNS = [
         "likely",
     ),
     (
+        # Found in DownUnderCTF 2023's public "static-file-server" beginner
+        # web challenge (app.py):
+        #     web.static('/files', './files', follow_symlinks=True)
+        # aiohttp's static-route handler skips its own "is the resolved
+        # path still inside the static root?" check entirely whenever
+        # follow_symlinks=True — CVE-2024-23334, present from the moment
+        # that parameter was introduced through aiohttp < 3.9.2. A plain
+        # `GET /files/../../../../flag.txt` (sent with curl --path-as-is so
+        # the client doesn't normalize the dots away) reads any file the
+        # process can. Even on a patched aiohttp, follow_symlinks=True
+        # still lets any symlink inside the static dir point anywhere, so
+        # it's worth a look either way. No request data appears on this
+        # line — the request path IS the input, implicitly, for every
+        # static route — so this is a configuration-shape rule, not taint.
+        "Path Traversal / LFI",
+        "python",
+        r"""\b(?:web\.static|add_static)\s*\(.*\bfollow_symlinks\s*=\s*True\b""",
+        "high",
+        "aiohttp static route registered with follow_symlinks=True — on aiohttp < 3.9.2 this skips the check "
+        "that the resolved file stays inside the static directory (CVE-2024-23334), so the request path itself "
+        "is a directory traversal. Even when patched, any symlink in the static dir can point outside it.",
+        "curl --path-as-is http://HOST/<static-prefix>/../../../../../../etc/passwd",
+        "likely",
+    ),
+    (
         "Path Traversal / LFI",
         "js",
         r"""(?:fs\.(?:readFile|readFileSync|createReadStream)|res\.sendFile)\s*\(.*?req\.(?:query|params|body)""",

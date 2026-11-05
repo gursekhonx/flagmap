@@ -1909,6 +1909,38 @@ check in between — proving this needs the AST engine's cross-statement
 taint tracking, not a same-line regex), and a safe counterpart calling
 `readfile()` on a fixed literal path.
 
+**aiohttp `follow_symlinks=True` static routes (`patterns.py`, v1.35.0)**:
+from DownUnderCTF 2023's public "static-file-server" beginner challenge,
+whose whole app is an aiohttp server with one line that matters:
+
+```python
+web.static('/files', './files', follow_symlinks=True)
+```
+
+When `follow_symlinks=True`, aiohttp's static handler never runs its
+`filepath.relative_to(self._directory)` containment check — that check
+lives inside `if not self._follow_symlinks:` — so `GET
+/files/../../../../flag.txt` (sent with `--path-as-is`) reads arbitrary
+files. That is CVE-2024-23334, present from the parameter's introduction
+until aiohttp 3.9.2 added the check back for both settings.
+
+Nothing in flagmap could see this: the request path is the implicit
+input of every static route, so there's no `request.` anywhere for a
+taint rule or the AST engine to start from, and the Dockerfile's
+unpinned `pip3 install aiohttp` gives `deps.py` no version to match.
+This is a configuration-shape rule instead — a single-line Python
+pattern under the existing "Path Traversal / LFI" name:
+`\b(?:web\.static|add_static)\s*\(.*\bfollow_symlinks\s*=\s*True\b`.
+It stays "likely" rather than being version-gated, because even on a
+patched aiohttp `follow_symlinks=True` still lets any symlink planted in
+the static directory point outside it.
+
+Verified across all four corpora with a per-finding diff against a saved
+baseline: CyberSci 392, DUCTF 2024 95, DUCTF 2025 146 — all unchanged;
+DUCTF 2023 99 → 100, the one real hit. Fixtures in the shared
+`tests/fixtures/python/vuln_sinks.py`/`clean_sinks.py`: the real line,
+plus the default and explicit-`False` forms as negatives.
+
 `report_md.py` deliberately has no fixture category of its own: it's a
 pure renderer over `Finding`/`Chain` objects the regression suite above
 already exercises and validates, with no detection logic of its own to

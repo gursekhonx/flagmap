@@ -110,3 +110,8 @@ SECRET_KEY = os.environ.get("SECRET_KEY", "dev-only-fallback-value")  # safe: Ha
 # A variable name with nothing secret-ish about it at all — must not
 # fire just because SOME string gets assigned somewhere.
 greeting_template = "hello there, friend"  # safe: Hardcoded Secret in Source
+
+# aiohttp static route left at the default follow_symlinks=False — the
+# resolved path is checked against the static root, so no finding.
+aiohttp_app.add_routes([web.static('/files', './files')])  # safe: Path Traversal / LFI
+aiohttp_app.add_routes([web.static('/files', './files', follow_symlinks=False)])  # safe: Path Traversal / LFI

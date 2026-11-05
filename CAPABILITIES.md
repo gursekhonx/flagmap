@@ -35,7 +35,10 @@ Ruby/Rails, Lua, Rust):
 - Path Traversal / LFI (`include`, `fopen`, `open`, `send_file`,
   `readFileSync`, etc. fed from user input; and — added v1.34.0, see
   ARCHITECTURE.md — PHP's `readfile()`, tracked through the AST taint
-  engine's cross-statement tracking the same way `fopen()` already was)
+  engine's cross-statement tracking the same way `fopen()` already was;
+  and, v1.35.0, an aiohttp `web.static(...)`/`add_static(...)` route with
+  `follow_symlinks=True`, which skips the in-root check entirely on
+  aiohttp < 3.9.2, CVE-2024-23334)
 - Server-Side Template Injection / SSTI (`render_template_string`, EJS,
   Handlebars, Nunjucks)
 - SSRF (`requests`/`urlopen`/`pycurl` in Python, `axios`/`fetch`/`http.get` in

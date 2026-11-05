@@ -175,3 +175,8 @@ SECRET_KEY = "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7" 
 # also found across the corpus (several other challenges hardcode
 # app.secret_key the same way). Same test-file-suppression caveat above.
 app.config["SECRET_KEY"] = "another-hardcoded-signing-key-value"  # safe: Hardcoded Secret in Source
+
+# aiohttp static route with follow_symlinks=True — mirrors DownUnderCTF
+# 2023's real "static-file-server" challenge verbatim (CVE-2024-23334 on
+# aiohttp < 3.9.2: the in-root check is skipped entirely).
+aiohttp_app.add_routes([web.static('/files', './files', follow_symlinks=True)])  # ruleid: Path Traversal / LFI

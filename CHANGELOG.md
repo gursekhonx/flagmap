@@ -748,3 +748,24 @@ entry below.
   `readfile()` several lines later, through an unrelated `file_exists()`
   check in between), and a safe counterpart calling `readfile()` on a
   fixed literal path.
+- ~~aiohttp static routes registered with `follow_symlinks=True`~~ —
+  added in v1.35.0, see ARCHITECTURE.md. From DownUnderCTF 2023's public
+  "static-file-server" beginner web challenge (`app.py`):
+  ```python
+  web.static('/files', './files', follow_symlinks=True)
+  ```
+  aiohttp's static handler skips its "is the resolved path still inside
+  the static root?" check entirely when `follow_symlinks=True`
+  (CVE-2024-23334, every aiohttp release before 3.9.2), so the request
+  path itself is a traversal: `curl --path-as-is
+  http://HOST/files/../../../../flag.txt`. flagmap reported nothing —
+  there's no request object on this line at all, since the URL path is
+  the implicit input for every static route, so no taint-based rule could
+  ever see it. Added a single-line Python pattern under "Path Traversal /
+  LFI" matching `web.static(...)`/`add_static(...)` with
+  `follow_symlinks=True`. The Dockerfile installs aiohttp unpinned, so a
+  `deps.py` entry wouldn't have caught this one; the code shape is the
+  signal. Verified: 204/204 regression (new `ruleid` plus two `safe`
+  cases — default and explicit `follow_symlinks=False`); CyberSci,
+  DUCTF 2024 and DUCTF 2025 unchanged (392/95/146); DUCTF 2023 goes from
+  99 to 100, exactly the real hit; `patterns.py` self-scan unchanged at 8.
