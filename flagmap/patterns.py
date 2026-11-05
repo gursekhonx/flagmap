@@ -1605,7 +1605,13 @@ RAW_PATTERNS = [
     (
         "Cross-Site Scripting (XSS)",
         "ejs",
-        r"""<%-\s*(?!include\s*\()[^%]+?%>""",
+        # (v1.55.0) the lookahead now sits BEFORE the optional whitespace.
+        # As `<%-\s*(?!include\s*\()`, a single space let the regex engine
+        # backtrack \s* to zero characters, test the lookahead at " include",
+        # pass, and match anyway — so every ordinary `<%- include('partials/
+        # header') %>` was reported as high-confidence XSS. 20 such lines
+        # across UofTCTF 2025 "1337 v4ul7" and 2026 "personal-blog".
+        r"""<%-(?!\s*include\s*\()[^%]+?%>""",
         "high",
         "EJS's <%- %> tag outputs raw, UNESCAPED HTML (the escaped form is <%= %>) — any non-constant "
         "expression inside it that traces back to user input is stored/reflected XSS. (<%- include(...) %> "

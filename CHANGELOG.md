@@ -1117,3 +1117,19 @@ entry below.
   to `render_template` as `safe`); per-finding corpus diff: UofTCTF
   117 → 118, the real line only — no other corpus changed;
   `ast_engine.py` self-scan clean.
+- ~~False positives: every EJS `<%- include('...') %>` reported as
+  high-confidence XSS~~ — fixed in v1.55.0, see ARCHITECTURE.md. The EJS
+  raw-output rule was meant to exclude partial includes:
+  `<%-\s*(?!include\s*\()[^%]+?%>`. But with a space after `<%-`, `\s*`
+  backtracks to zero characters, the lookahead is tested at
+  `" include("`, passes, and the line matches anyway — so the exclusion
+  only worked for `<%-include(` with no space, the less common spelling.
+  UofTCTF 2025 "1337 v4ul7" and 2026 "personal-blog" produced 20 such
+  findings, burying personal-blog's three real raw-output lines
+  (`<%- post.preview %>`, `<%- content %>`, `<%- draftContent %>`, the
+  intended stored XSS). The lookahead now sits before the whitespace:
+  `<%-(?!\s*include\s*\()`. Verified: 279/279 regression with the first
+  EJS fixtures this rule has had (`ejs_raw_vuln.ejs` / `_clean.ejs`; the
+  clean file fails on the old regex, confirmed by stashing the fix);
+  per-finding corpus diff: UofTCTF 118 → 98, exactly the 20 include lines,
+  the three real lines kept; every other corpus unchanged.

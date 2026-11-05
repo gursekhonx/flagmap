@@ -1,0 +1,4 @@
+<!-- Partial includes (with and without a space after the tag) and escaped output. -->
+<%- include('partials/page-start') %> // safe: Cross-Site Scripting (XSS)
+<%-include('partials/page-end') %> // safe: Cross-Site Scripting (XSS)
+<p><%= content %></p> // safe: Cross-Site Scripting (XSS)

@@ -2694,6 +2694,33 @@ a session cookie only to look it up. Fixtures: cookie → JWT → f-string →
 `render_template_string` (Python) and `req.headers[...]` → `execSync`
 (JS) as `ruleid`; a cookie passed only to `render_template` as `safe`.
 
+**EJS include exclusion defeated by backtracking (`patterns.py`,
+v1.55.0)**: the EJS raw-output rule always meant to skip partial
+includes, and said so in its own `why` text:
+
+```
+<%-\s*(?!include\s*\()[^%]+?%>
+```
+
+For `<%- include('partials/page-start') %>` the engine first lets `\s*`
+take the space; the lookahead sees `include(` and fails; the engine then
+backtracks `\s*` to zero characters, re-tests the lookahead at
+`" include("` — which isn't `include(` — and the match succeeds. The
+exclusion therefore only ever worked for the no-space spelling. In the
+UofTCTF archives that meant 20 "high"/"likely" XSS findings across 2025
+"1337 v4ul7" and 2026 "personal-blog", every one a layout include, and
+personal-blog's three genuinely raw outputs of user content (`<%-
+post.preview %>`, `<%- content %>`, `<%- draftContent %>` — the intended
+stored XSS) were lost among them. Moving the lookahead in front of the
+whitespace, `<%-(?!\s*include\s*\()`, removes the backtracking path.
+
+The rule had no fixtures at all, which is how this survived;
+`tests/fixtures/js/ejs_raw_vuln.ejs` / `_clean.ejs` now cover raw output
+of a variable (`ruleid`), both include spellings and `<%= %>` (`safe`).
+The clean file fails against the old regex (checked by stashing the fix
+and re-running). Per-finding diff: UofTCTF 118 → 98, exactly the 20
+include lines; nothing else in any corpus.
+
 `report_md.py` deliberately has no fixture category of its own: it's a
 pure renderer over `Finding`/`Chain` objects the regression suite above
 already exercises and validates, with no detection logic of its own to
