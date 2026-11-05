@@ -1169,3 +1169,18 @@ entry below.
   value came from one. Verified: 287/287 regression; per-finding corpus
   diff: UofTCTF 99 → 100, the real line — no other change, including from
   treating `new X(...)` as calls; `ast_engine.py` self-scan clean.
+- ~~JSON assembled by template-literal interpolation~~ — added in
+  v1.58.0, see ARCHITECTURE.md and CAPABILITIES.md. From UofTCTF 2024's
+  public "Jay's Bank" challenge: `db.convert()` is a hand-rolled
+  `JSON.stringify` — `` `"${k}": ... `"${v}"` `` — used to store each
+  user's profile with a server-set `"role": "user"`. A profile answer of
+  `a","role":"admin"}` closes the string and adds a role; MySQL's
+  non-strict truncation at 255 characters (reached by lowercasing `İ`,
+  which doubles in length) cuts off the server's trailing role. New
+  single-line JS rule under a new name, "JSON Injection": a quoted
+  `${...}` next to a colon inside a template literal. Verified: 290/290
+  regression (`JSON.stringify` and a quoted interpolation in prose as
+  `safe`); per-finding corpus diff: UofTCTF +1 (the real line) and LA CTF
+  +1 — 2026 "glotq"'s browser script builds its request body the same
+  way, a true instance of the shape though only self-affecting there;
+  CyberSci and DUCTF unchanged; `patterns.py` self-scan unchanged at 8.

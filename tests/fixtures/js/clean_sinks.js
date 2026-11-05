@@ -99,3 +99,7 @@ app.post("/search2", (req, res) => {
 app.post("/search3", (req, res) => {
   const hits = new RegExp(_.escapeRegExp(req.body.q), "i");  // safe: Regex Injection / ReDoS
 });
+
+// JSON.stringify, and a template literal with interpolation but no JSON shape.
+const body = JSON.stringify({ role: "user", answer });  // safe: JSON Injection
+const greeting = `Hello, "${name}" — welcome back`;  // safe: JSON Injection

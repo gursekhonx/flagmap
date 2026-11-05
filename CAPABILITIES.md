@@ -109,6 +109,9 @@ Ruby/Rails, Lua, Rust):
   from the request body; and — added v1.41.0, see ARCHITECTURE.md, any
   language — a `$regex` operator whose pattern is an unescaped variable,
   a prefix oracle / ReDoS if it carries request data)
+- JSON Injection (added v1.58.0, JS): JSON text assembled with template-
+  literal interpolation inside quotes (`"${k}": "${v}"`) instead of
+  `JSON.stringify` — a quote in the value adds keys
 - Regex Injection / ReDoS (added v1.57.0, JS, AST-tracked): request data
   compiled with `new RegExp(...)` — a timing/match oracle against
   whatever it's run over, and a ReDoS either way; skipped when the input

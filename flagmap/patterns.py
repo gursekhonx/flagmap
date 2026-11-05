@@ -896,6 +896,28 @@ RAW_PATTERNS = [
         "Add an unexpected field to the JSON body, e.g. {\"isAdmin\": true}, and see if it's accepted.",
         "possible",
     ),
+    (
+        # Found in UofTCTF 2024's public "Jay's Bank" web challenge
+        # (utils/db.js), a hand-rolled JSON.stringify:
+        #     `"${k}": ${... ? convert(v) : `"${v}"`}`
+        # Every profile field is pasted between quotes with no escaping, so
+        # a secret_answer of  a","role":"admin"}  closes the string and adds
+        # a role key; the server's own trailing "role":"user" is then cut
+        # off by MySQL's non-strict 255-char truncation (lowercasing `İ`
+        # doubles its length to get there). The signal is a quoted ${...}
+        # next to a colon — JSON text assembled by interpolation instead of
+        # JSON.stringify.
+        "JSON Injection",
+        "js",
+        r"""`[^`]*(?:"\$\{[^}]+\}"\s*:|:\s*"\$\{[^}]+\}")""",
+        "medium",
+        "JSON text is assembled with template-literal interpolation inside quotes rather than JSON.stringify(). "
+        "A value containing a double quote closes the string early, so whoever controls it can add or "
+        "override keys in the resulting object (a role, an isAdmin flag) once it's parsed.",
+        "Put a closing quote plus a new key in the field: x\",\"role\":\"admin  — and look for a way (length "
+        "limits, truncation, duplicate-key ordering) to neutralize anything the server appends after it.",
+        "possible",
+    ),
 
     # ---------------- PROTOTYPE POLLUTION ----------------
     (

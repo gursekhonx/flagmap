@@ -135,3 +135,10 @@ app.post("/search", (req, res) => {
   const regexPattern = query.slice(1, -1);
   const searchRegex = new RegExp(regexPattern, 'g');  // ruleid: Regex Injection / ReDoS
 });
+
+// Hand-rolled JSON via interpolation — mirrors UofTCTF 2024 "Jay's Bank".
+function convert(o) {
+  return `{${Object.entries(o).map(([k, v]) =>
+    `"${k}": ${typeof v === "object" && v !== null ? convert(v) : `"${v}"`}`  // ruleid: JSON Injection
+  ).join(", ")}}`;
+}

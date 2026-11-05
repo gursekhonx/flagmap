@@ -2800,6 +2800,40 @@ Per-finding corpus diff: UofTCTF 99 → 100 (`code-db/src/app.js:97`) and
 no other change anywhere — including none from making every `new X(...)`
 a call site.
 
+**JSON assembled by interpolation (`patterns.py`, v1.58.0)**: from
+UofTCTF 2024's public "Jay's Bank" challenge (`utils/db.js`):
+
+```js
+convert(o) {
+  return `{${Object.entries(o).map(([k, v]) =>
+    `"${k}": ${typeof v === "object" && v !== null ? convert(v) : `"${v}"`}`
+  ).join(", ")}}`.toLowerCase();
+}
+```
+
+The profile update stores `convert({ phone, credit_card, secret_question,
+secret_answer, role: "user" })` in a 255-character column. Nothing is
+escaped, so `secret_answer` = `a","role":"admin"}` closes its string and
+writes a role. The server's own `"role":"user"` still follows; the solve
+pushes it past 255 characters — strict mode is off, so MySQL truncates
+silently — using `İ`, which `.toLowerCase()` turns into two characters
+after the length checks have run.
+
+New single-line JS rule, new vuln name "JSON Injection" (the outcome here
+is a mass-assignment-style role change, but the code-level mistake is
+building JSON text, and nothing existing described that): a template
+literal containing a quoted interpolation next to a colon —
+`"${...}"\s*:` (an interpolated key) or `:\s*"${...}"` (an interpolated
+string value). HTML attributes use `=` and prose rarely puts a colon
+against a quoted placeholder, so the shape is specific; `JSON.stringify`
+never matches. "medium"/"possible".
+
+Per-finding corpus diff: UofTCTF +1 (`db.js:61`) and LA CTF +1 — 2026
+"glotq"'s `static/app.js` builds its request body as `` jsonStr += `
+"command": "${command}",\n` ``. That's the same shape and does let the
+typist add keys, but only to their own request, so it's a correct match
+with no impact in that challenge. CyberSci and DUCTF unchanged.
+
 `report_md.py` deliberately has no fixture category of its own: it's a
 pure renderer over `Finding`/`Chain` objects the regression suite above
 already exercises and validates, with no detection logic of its own to
