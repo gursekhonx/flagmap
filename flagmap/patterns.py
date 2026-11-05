@@ -1121,6 +1121,27 @@ RAW_PATTERNS = [
         "If several outputs are observable, Math.random()'s internal state can sometimes be recovered/predicted.",
         "likely",
     ),
+    (
+        # Found in LA CTF 2023's public "uuid-hell" web challenge
+        # (src/server.js): session ids — admin ones included — are
+        #     uuid.v1({'node': [...fixed...], 'clockseq': 0b10101001100100})
+        # A version-1 UUID is a 60-bit timestamp plus clock sequence plus
+        # node id; with node and clockseq fixed, the only unknown is the
+        # creation time. The page shows md5 hashes of admin uuids, so the
+        # solve brackets the admin's creation time from its own cookie and
+        # cracks the hash over a handful of hex digits. Also matches the
+        # common aliased imports of v1 from the uuid package.
+        "Insecure Randomness",
+        "js",
+        r"""\buuid\.v1\s*\(|\{\s*v1(?:\s*(?::|\bas\b)\s*\w+)?\s*\}\s*(?:=\s*require\s*\(\s*|from\s*)['"]uuid['"]""",
+        "medium",
+        "Version-1 (time-based) UUIDs aren't random: they encode the creation timestamp, a clock sequence and "
+        "a node id. If one is used as a session id, token or secret, anyone who can estimate when it was made "
+        "(e.g. from their own v1 UUID issued around the same time) can enumerate it.",
+        "Get a v1 UUID of your own near the target's creation time, then enumerate nearby timestamps keeping "
+        "the same clock-sequence/node fields.",
+        "possible",
+    ),
 
     # ---------------- CORS MISCONFIGURATION (in code) ----------------
     (

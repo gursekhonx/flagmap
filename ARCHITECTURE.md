@@ -2409,6 +2409,34 @@ decipher handed to a helper that calls `.final()` elsewhere is
 over-reported as (A); an options object built on another line is
 over-reported as (B).
 
+**Version-1 UUIDs used as secrets (`patterns.py`, v1.47.0)**: from LA CTF
+2023's public "uuid-hell" challenge (`src/server.js`):
+
+```js
+function randomUUID() {
+    return uuid.v1({'node': [0x67, 0x69, 0x6E, 0x6B, 0x6F, 0x69], 'clockseq': 0b10101001100100});
+}
+```
+
+Every cookie id, including the admin's, comes from this. A v1 UUID is a
+60-bit timestamp, a clock sequence and a node id; with the last two fixed,
+only the creation time is unknown. The home page lists md5(`"admin" +
+id`) for each admin, so the solve takes the player's own fresh id as a
+time reference and runs hashcat over the handful of timestamp digits that
+differ. flagmap reported the two md5 calls but nothing about the ids
+themselves — the existing Insecure Randomness rules look for
+`Math.random()` assigned to a token-ish name.
+
+New single-line JS rule, "medium"/"possible": `uuid.v1(` directly, or the
+aliased import shapes `const { v1: makeId } = require('uuid')` and
+`import { v1 as makeId } from 'uuid'` (the alias is how this package is
+usually pulled in, as `{ v4: uuid }` is elsewhere in the same archive).
+`v4` in any form doesn't match. Python's `uuid.uuid1()` is deliberately
+not included: the one place it occurs in these corpora is a CyberSci
+attack bot generating throwaway email addresses, not a secret. Per-finding
+corpus diff: LA CTF 183 → 184, only the real line; everything else
+unchanged.
+
 `report_md.py` deliberately has no fixture category of its own: it's a
 pure renderer over `Finding`/`Chain` objects the regression suite above
 already exercises and validates, with no detection logic of its own to

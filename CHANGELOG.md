@@ -983,3 +983,15 @@ entry below.
   and CBC); per-finding corpus diff: LA CTF 181 → 183, exactly the two
   real lines; all other corpora unchanged; guard and `scanner.py`
   self-scan clean.
+- ~~Time-based (v1) UUIDs from the JS `uuid` package~~ — added in
+  v1.47.0, see ARCHITECTURE.md and CAPABILITIES.md. From LA CTF 2023's
+  public "uuid-hell" challenge: every session id, admin ones included, is
+  `uuid.v1({'node': [...], 'clockseq': ...})` with node and clock sequence
+  fixed, so the only unknown is the creation time. The page lists md5
+  hashes of admin ids; the solve brackets the time from the player's own
+  cookie and cracks a few hex digits with hashcat. flagmap only flagged the
+  md5 calls. Added a single-line JS "Insecure Randomness" rule for
+  `uuid.v1(` and the aliased `{ v1: x } = require('uuid')` / `import { v1
+  as x } from 'uuid'` forms. Verified: 253/253 regression (both forms
+  `ruleid`, v4 `safe`); per-finding corpus diff: LA CTF 183 → 184, the
+  real line only; `patterns.py` self-scan unchanged at 8.

@@ -76,3 +76,7 @@ function htmlEscapeSafe(s) {
   s = s.replaceAll("<", "&lt;");  // safe: Cross-Site Scripting (XSS)
   return s;
 }
+
+// Random (v4) UUIDs.
+const { v4: uuid4 } = require('uuid');  // safe: Insecure Randomness
+const reqId = uuid.v4();  // safe: Insecure Randomness

@@ -143,7 +143,9 @@ Ruby/Rails, Lua, Rust):
   verified (no `.final()`), or a GCM decipher without `authTagLength`,
   which accepts a 1-byte tag)
 - Insecure Randomness (`random`/`Math.random()`/`rand()` used for
-  tokens/passwords/OTPs instead of a CSPRNG)
+  tokens/passwords/OTPs instead of a CSPRNG; and — added v1.47.0 — JS
+  time-based `uuid.v1()` / `{ v1 }` from the `uuid` package, which is
+  enumerable from its creation time)
 - CORS Misconfiguration (reflected/wildcard origin, especially with
   credentials enabled)
 - Host Header Injection (`$_SERVER['HTTP_HOST']`, `request.host`,

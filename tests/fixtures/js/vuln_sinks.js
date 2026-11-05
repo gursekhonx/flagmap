@@ -107,3 +107,7 @@ function htmlEscape(s) {
   s = s.replace('\'', "&#x27;");  // ruleid: Cross-Site Scripting (XSS)
   return s;
 }
+
+// Time-based v1 UUIDs as session ids — mirrors LA CTF 2023 "uuid-hell".
+const sessionId = uuid.v1({ node: [0x67, 0x69, 0x6e, 0x6b, 0x6f, 0x69], clockseq: 0x2a64 });  // ruleid: Insecure Randomness
+const { v1: makeId } = require('uuid');  // ruleid: Insecure Randomness
