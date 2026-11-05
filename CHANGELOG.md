@@ -379,3 +379,37 @@ entry below.
   limitation the pre-existing "Weak Auth Logic" hardcoded-credential rule
   already has. The positive case was instead verified directly against
   the real, non-test-pathed corpus above.
+- ~~Zip Slip via manual zip extraction, not just a bare `.extract()`/
+  `.extractall()` call~~ — added in v1.27.0, see ARCHITECTURE.md and
+  CAPABILITIES.md. Found in the real CyberSci nationals-2024-25
+  "history-stealer" web challenge's `webapp/app.py` `/file_upload` route
+  (lines 111-151) — the code's own comment literally says "Extracting
+  ZIP (vulnerable to Zip Slip)...". It even TRIES to check for traversal
+  (`if raw_name.startswith("/") or ".." in raw_name:`), but the "fix" is
+  backwards: it normalizes the traversal-laden name into an absolute
+  path (`os.path.normpath(os.path.join("/", raw_name))`) and writes
+  there anyway, instead of rejecting the entry. flagmap already had a
+  "Path Traversal / Zip Slip" rule, but it only matches a literal
+  `.extract(`/`.extractall(` call — this file calls neither; it manually
+  walks `zip_ref.infolist()` and writes each member's bytes itself via
+  `zip_ref.open(member)` + `open(dest_path, "wb")`, a shape the existing
+  rule has no way to see. Added `zipslip_guard.py`, a Python-only,
+  whole-file, two-signal best-effort check firing under the SAME vuln
+  name (`Path Traversal / Zip Slip`): (1) a variable assigned from a zip
+  member's own `.filename`
+  (from `.infolist()`/`.filelist`, or the loop variable itself when
+  iterating `.namelist()`) that's (2) later joined into a destination
+  path via `os.path.join(...)` — fired only when the file also appears
+  to write somewhere (`open(..., "wb")`/`shutil.copyfileobj`/`.write(`)
+  and never demonstrates a real containment check anywhere
+  (`.resolve()`...`.relative_to(`/`.is_relative_to(`, `os.path.realpath(`
+  +`.startswith(`, or `os.path.commonpath(`). Deliberately does NOT treat
+  a bare `".." in name`-style substring test as proof of safety, since
+  the real motivating bug has exactly that test and still gets it wrong
+  — only an actual path-containment verification idiom suppresses it.
+  Verified against the full 4-snapshot corpus: `grep` for `zipfile`/
+  `ZipFile` usage anywhere in the corpus turns up exactly two files —
+  the vulnerable one (fires, at the exact `os.path.normpath(os.path.join(
+  "/", raw_name))` line) and that same challenge's own
+  `solve_files/create_zip.py` (only ever *creates* a zip, confirmed zero
+  false positive since it touches none of this check's signals).

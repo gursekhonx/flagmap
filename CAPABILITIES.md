@@ -184,7 +184,17 @@ Ruby/Rails, Lua, Rust):
 - `addslashes()` misused as an XSS defense near request data (it only
   escapes quotes/backslashes — it does not stop a `</script>` tag breakout)
 - Path Traversal / Zip Slip (`zipfile`/`tarfile` `.extract()`/`.extractall()`
-  calls, which are unsafe unless member names are validated first)
+  calls, which are unsafe unless member names are validated first; and —
+  added v1.27.0, see `zipslip_guard.py`/ARCHITECTURE.md — a manual
+  extraction loop that never calls `.extract()`/`.extractall()` at all,
+  instead walking `.infolist()`/`.filelist`/`.namelist()` itself and
+  joining each entry's own `.filename` into a destination path via
+  `os.path.join(...)`, with no real path-containment check anywhere in
+  the file. That second check is deliberately strict about what counts
+  as "real": a bare `".." in name`-style substring test does NOT suppress
+  it, only a genuine containment-verification idiom does (`.resolve()`
+  chained with `.relative_to(`/`.is_relative_to(`, `os.path.realpath(`
+  chained with `.startswith(`, or `os.path.commonpath(`))
 - Insecure session tokens built from a plain `base64.b64encode(username)`
   with no signature/secret — trivially forgeable for any account
 - JWT `verify_signature` explicitly set to anything other than a literal

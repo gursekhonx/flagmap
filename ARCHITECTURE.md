@@ -535,6 +535,113 @@ and `clean_sinks.py`) exercise the suppression path only, with the real
 positive case verified directly against the live corpus instead, as
 described above.
 
+**Zip Slip via manual extraction, not just a bare `.extract()`/
+`.extractall()` call — `zipslip_guard.py` (v1.27.0)**: found in the real
+CyberSci nationals-2024-25 "history-stealer" web
+challenge's `webapp/app.py` `/file_upload` route. The challenge accepts an
+uploaded `.zip` and manually walks its entries to extract them — its own
+comment literally says `# Extracting ZIP (vulnerable to Zip Slip)...`:
+
+```python
+if raw_name.startswith("/") or ".." in raw_name:
+    dest_path = os.path.normpath(os.path.join("/", raw_name))
+else:
+    dest_path = os.path.join(unzip_path, raw_name)
+...
+with zip_ref.open(member) as src, open(dest_path, "wb") as dst:
+    shutil.copyfileobj(src, dst)
+```
+
+What makes this interesting (and what makes it a real detection-design
+problem, not just "add a regex for `zipfile`"): the code doesn't just
+forget to check for traversal — it checks, and gets the fix backwards.
+On detecting `..` or a leading `/`, instead of REJECTING the entry, it
+normalizes the name against `/` and writes to the resulting absolute
+path anyway. A zip entry named `../../etc/cron.d/evil` sails straight
+through: the `".." in raw_name` branch fires, `os.path.normpath(os.path
+.join("/", "../../etc/cron.d/evil"))` resolves to `/etc/cron.d/evil`, and
+the file gets written there. This matters for detection specifically
+because it rules out the laziest possible check: "does this file
+contain a `..`-substring test near a zip extraction." It does — and the
+bug is still live. Any suppression logic for this check has to look for
+evidence the path was actually *verified* to stay inside the extraction
+root, not just evidence that someone *thought about* traversal.
+
+flagmap already had a rule for this vuln class — `patterns.py`'s
+`"Path Traversal / Zip Slip"` entry, which matches a bare `\.(?:extractall|
+extract)\s*\(` call. But this file calls neither: it doesn't trust the
+standard library's own extraction method at all, it manually walks
+`zip_ref.infolist()` and writes each member's bytes itself via
+`zip_ref.open(member)` plus `open(dest_path, "wb")` — a shape the
+existing regex has no way to see, since there's no `.extract(`/
+`.extractall(` call anywhere in the file for it to match. So the
+existing rule fires zero times on the real bug, confirmed directly.
+`zipslip_guard.py` is a new best-effort, whole-file, two-signal module,
+reporting under that SAME existing vuln name (`Path Traversal / Zip
+Slip`) since both rules describe the identical underlying bug — this is
+a second detection path for it, not a new vuln category — built in
+the same family as `jenkins_pipeline_guard.py`: regex-only (there's no
+dedicated AST sink category that would fit — the taint here flows from a
+zip entry's own metadata, not from `request.args`/`request.form`-style
+superglobal access, so `ast_engine.py`'s `SOURCE_TEXT_RE` convention
+doesn't apply), and deliberately collects its signals from the whole
+file's text rather than one line, because the real bug spans several
+non-adjacent statements (the member-filename assignment, the traversal
+"check", and the eventual `open(dest_path, "wb")`).
+
+The two required signals: (1) a variable assigned from a zip member's own
+`.filename` attribute (`raw_name = member.filename`, from iterating
+`.infolist()`/`.filelist`) OR the loop variable itself when iterating
+`.namelist()` (which yields plain filename strings directly, no `.filename`
+attribute needed); and (2) that same variable later appearing inside an
+`os.path.join(...)` call anywhere in the file. Both are required, plus a
+whole-file write-sink check (`open(..., "wb")`/`shutil.copyfileobj(`/
+`.write(`) to confirm the computed path actually gets used, before this
+ever fires. The suppression side is the one that needed the most care,
+for exactly the reason above: rather than looking for any traversal-
+sounding substring, it only recognizes genuine containment-verification
+idioms — `Path(...).resolve()` chained with `.relative_to(`/
+`.is_relative_to(`, `os.path.realpath(` chained with `.startswith(`, or
+`os.path.commonpath(` — anywhere in the file. None of those appear in the
+real vulnerable file (confirmed: it has no `.resolve()`, no
+`commonpath`, nothing beyond the broken `..`-substring test), so the
+check correctly fires there, at the exact `os.path.normpath(os.path.join(
+"/", raw_name))` line.
+
+Deliberately scoped to Python only — the only real evidence for this
+vuln class anywhere in the 4-snapshot corpus is this one file, found via
+`grep -rl "zipfile\|ZipFile"` across the whole corpus. That same grep
+turns up exactly one other hit: this same challenge's own
+`solve_files/create_zip.py`, which only ever *creates* a zip
+(`zipfile.ZipFile(..., "w")`, `.write(local_path, arcname)` to build the
+attack payload for the solve script) and never extracts one — it never
+assigns a variable from a `.filename` attribute or a `.namelist()` loop,
+so it touches none of this module's signals and produces zero findings,
+confirmed directly. Two dedicated fixtures were added rather than
+extending `vuln_sinks.py`/`clean_sinks.py` as usual, because this check's
+signals are collected across an entire file's text — mixing it into a
+file that's already full of unrelated `open(`/`os.path.join(` calls and
+sanitizer-sounding comments would make the fixture's pass/fail depend on
+content far away from the actual test case. `tests/fixtures/python/
+zipslip_vuln.py` mirrors the real bug's shape closely (including the same
+backwards `..`-check pattern); `zipslip_clean.py` is the same shape with
+a genuine `.resolve()`/`.relative_to()` containment check added, proving
+the suppression path actually works and isn't just "never fires."
+
+Known blind spots, stated as plainly as every other guard module's: no
+interprocedural/control-flow proof that the computed path is truly
+reached (a file that happens to have an unrelated `open(..., "wb")` call
+elsewhere, plus the two taint signals, could in principle false-positive
+— not observed in this corpus, but acknowledged); no coverage for any
+zip-handling library beyond the stdlib `zipfile` module's own
+`.infolist()`/`.namelist()`/`.filelist`; and a correctly-guarded
+extraction using a containment idiom outside the three recognized ones
+(e.g., a hand-rolled check this module doesn't know to look for) would be
+wrongly flagged. Accepted on the same terms as every other best-effort
+guard in this file — real signal on zero prior coverage, confirmed true
+on the one real motivating bug, confirmed to produce no stray hits
+anywhere else in the corpus.
+
 **Missing Authentication Check (`authn_guard.py`, v1.15.0) and guarded-
 deserialization advice (`pickle_guard.py`, v1.15.0)** both came out of
 testing flagmap against a real attached CTF challenge rather than a

