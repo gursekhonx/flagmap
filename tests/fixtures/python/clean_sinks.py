@@ -100,3 +100,13 @@ def plain_concat_unrelated_name():
     # concatenation is happening somewhere in a Python file.
     greeting = "Hello, " + request.args.get("name", "")
     return greeting  # safe: GraphQL / Query Injection
+
+
+# Hardcoded Secret in Source: read from the environment, not a literal —
+# the whole point of the check is a literal RIGHT of "=", and this isn't
+# one (os.environ.get(...) doesn't start with a quote character at all).
+SECRET_KEY = os.environ.get("SECRET_KEY", "dev-only-fallback-value")  # safe: Hardcoded Secret in Source
+
+# A variable name with nothing secret-ish about it at all — must not
+# fire just because SOME string gets assigned somewhere.
+greeting_template = "hello there, friend"  # safe: Hardcoded Secret in Source

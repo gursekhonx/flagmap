@@ -1143,6 +1143,50 @@ RAW_PATTERNS = [
         "possible",
     ),
 
+    # ---------------- HARDCODED SECRET IN SOURCE ----------------
+    (
+        # Found in the real CyberSci nationals-2025-26 "assault_and_battery"
+        # web challenge (crypto/jwt.py): `SECRET_KEY =
+        # "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7"`,
+        # used directly as the HS256 JWT signing key for every session
+        # token the app issues. flagmap already catches a hardcoded secret
+        # sitting in a Dockerfile/docker-compose.yml/.env file
+        # (config_patterns.py's three "Hardcoded Secret in ..." checks),
+        # but had zero coverage for the exact same problem one layer
+        # deeper — a signing/encryption key assigned directly as an
+        # application-source string literal instead of read from the
+        # environment/a secrets manager. For a source-review CTF
+        # challenge this matters even though the player already has this
+        # same source file: it's the difference between "the deployed
+        # instance's secret happens to be readable from the leaked
+        # source" (this) and "the secret is only knowable by compromising
+        # the running environment" (the intended, harder case) — and in a
+        # defence-style event, a hardcoded (rather than per-deployment,
+        # randomly generated) secret can mean every team's box shares the
+        # same forgeable key. Deliberately a short, specific name list
+        # (signing/encryption-key vocabulary) rather than a bare
+        # "SECRET"/"PASSWORD" — those are common enough as ordinary
+        # variable names in non-secret contexts that a short list kept
+        # false positives low; same scoping trade patterns.py already
+        # makes everywhere else for a vocabulary-anchored rule. Tagged
+        # "generic" since the shape (NAME = "literal", or a dict-key
+        # assignment like app.config["SECRET_KEY"] = "literal") is
+        # identical across every language flagmap supports — this isn't
+        # Python-specific despite where it was found.
+        "Hardcoded Secret in Source",
+        "generic",
+        r'''\b(?:SECRET_KEY|JWT_SECRET|SESSION_SECRET|API_KEY|PRIVATE_KEY|ENCRYPTION_KEY|AES_KEY|SIGNING_KEY)\s*=\s*["'][^"'\s]{8,}["']|'''
+        r'''["'](?:SECRET_KEY|JWT_SECRET|SESSION_SECRET|API_KEY|PRIVATE_KEY|ENCRYPTION_KEY|AES_KEY|SIGNING_KEY)["']\]?\s*=\s*["'][^"'\s]{8,}["']''',
+        "high",
+        "A signing/encryption key is assigned directly as a string literal in source rather than read from "
+        "the environment or a secrets manager — anyone with read access to this source (which a source-review "
+        "CTF player already has) can forge/decrypt anything signed or encrypted with it, and if this same "
+        "literal ships to every deployment, it isn't even deployment-specific.",
+        "Use this literal value directly as the signing/encryption key to forge your own tokens or decrypt "
+        "captured ciphertext.",
+        "likely",
+    ),
+
     # ---------------- SENSITIVE DATA EXPOSURE IN LOGS ----------------
     (
         "Sensitive Data Exposure in Logs",
@@ -1653,6 +1697,11 @@ RAW_PATTERNS = [
 # when the file looks like a test file (see scanner.is_test_file()).
 NOISY_IN_TEST_FILES = {
     "Try the hardcoded value directly as a login/API credential.",
+    # Hardcoded Secret in Source (v1.26.0) — a test fixture/example config
+    # routinely hardcodes a throwaway SECRET_KEY/JWT_SECRET for a test
+    # Flask/Express app instance, which is expected and not a real finding.
+    "Use this literal value directly as the signing/encryption key to forge your own tokens or decrypt "
+    "captured ciphertext.",
 }
 
 

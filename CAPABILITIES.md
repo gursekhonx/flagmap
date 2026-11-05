@@ -119,6 +119,16 @@ Ruby/Rails, Lua, Rust):
   concatenation instead, anchored on the variable's own name since the
   GraphQL-shaped literal text itself can live in separate constants a
   single line can't see)
+- Hardcoded Secret in Source (added v1.26.0, any language — see
+  ARCHITECTURE.md): a signing/encryption key (`SECRET_KEY`, `JWT_SECRET`,
+  `SESSION_SECRET`, `API_KEY`, `PRIVATE_KEY`, `ENCRYPTION_KEY`, `AES_KEY`,
+  `SIGNING_KEY`, case-insensitive, as a bare assignment or a dict-key
+  assignment like Flask's `app.config["SECRET_KEY"] = ...`) assigned
+  directly as a string literal rather than read from the environment or a
+  secrets manager. Distinct from the existing Dockerfile/compose/`.env`
+  "Hardcoded Secret in ..." misconfiguration checks below — this one
+  catches the same underlying mistake one layer deeper, baked directly
+  into application source
 - LDAP Injection (AST-matched since v1.4.0, Python/PHP/Java): a search
   filter string built from request data and passed to python-ldap's
   `search_s`/`search_st`/`search_ext`/`search_ext_s`, PHP's `ldap_search`/

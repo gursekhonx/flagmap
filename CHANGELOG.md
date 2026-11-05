@@ -345,3 +345,37 @@ entry below.
   corpus (only the real line fires; the five pre-existing `%`-formatting
   hits in underground-bank's main.py are unaffected) and confirmed true
   on the real file.
+- ~~Signing/encryption key hardcoded directly as a source string literal~~
+  — added in v1.26.0, see ARCHITECTURE.md and CAPABILITIES.md. Found in
+  the real CyberSci nationals-2025-26 "assault_and_battery" web
+  challenge's `crypto/jwt.py` line 9: `SECRET_KEY =
+  "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7"`, a
+  JWT HS256 signing key baked straight into source rather than read from
+  the environment — a source-review CTF player (or anyone with repo
+  access) can forge any token signed with it on sight. None of flagmap's
+  existing "Hardcoded Secret in ..." checks caught this: those all look
+  at Dockerfiles, compose files, and `.env` files for misconfiguration —
+  nothing was looking at hardcoded secrets baked into the application's
+  own Python/JS/etc. source. Added as a new `generic`-language
+  `RAW_PATTERNS` regex matching a small curated vocabulary of
+  signing/encryption-key variable and dict-key names (`SECRET_KEY`,
+  `JWT_SECRET`, `SESSION_SECRET`, `API_KEY`, `PRIVATE_KEY`,
+  `ENCRYPTION_KEY`, `AES_KEY`, `SIGNING_KEY`) assigned a quoted string
+  literal at least 8 characters long — both the bare `NAME = "..."` shape
+  and Flask's dict-key `app.config["NAME"] = "..."` shape, and (since
+  every `RAW_PATTERNS` regex in this file is compiled case-insensitively)
+  matching `app.secret_key` just as readily as `SECRET_KEY`. Verified
+  against the full 4-snapshot corpus: exactly 4 real hits, all genuine —
+  `assault_and_battery/crypto/jwt.py:9`, nationals-2024-25
+  `history-stealer/webapp/app.py:10` (`app.secret_key =
+  "supersecretkey"`), and both `UnauthorizedAndroidApp1`/`2`
+  `main.py:8` — with zero false positives anywhere else. Surfaced a
+  structural limitation of the regression harness itself along the way:
+  `is_test_file()` treats any path containing a `tests`/`specs` segment
+  as a test file, every fixture in this suite necessarily lives under
+  `tests/fixtures/...`, and this rule's payload is (correctly)
+  registered in `NOISY_IN_TEST_FILES` — so the harness can only assert
+  this rule's *suppression*, never its raw "fires" case, the same
+  limitation the pre-existing "Weak Auth Logic" hardcoded-credential rule
+  already has. The positive case was instead verified directly against
+  the real, non-test-pathed corpus above.

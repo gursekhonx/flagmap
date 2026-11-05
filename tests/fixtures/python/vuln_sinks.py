@@ -151,3 +151,27 @@ def graphql_path_concat(id_raw):
     _PATH_TEMPLATE_SUFFIX = ") { id value author { name } } }"
     query_text = _PATH_TEMPLATE_PREFIX + id_raw + _PATH_TEMPLATE_SUFFIX  # ruleid: GraphQL / Query Injection
     return query_text
+
+
+# Hardcoded Secret in Source (v1.26.0), found in the real CyberSci
+# nationals-2025-26 "assault_and_battery" web challenge's crypto/jwt.py:
+# a JWT HS256 signing key assigned directly as a source string literal
+# instead of read from the environment. NOTE: every fixture in this
+# whole suite lives under a "tests/fixtures/..." path, and this rule's
+# payload is deliberately in NOISY_IN_TEST_FILES (same as the pre-
+# existing "Weak Auth Logic" hardcoded-credential rule above it) — so
+# is_test_file() suppresses it here unconditionally, same as it would on
+# any real test fixture/example-config file. That means this harness has
+# no way to assert the RAW positive case for this rule (there's no
+# fixture location that isn't itself "a test file" by that same check);
+# the positive case was instead verified directly against the real
+# corpus (crypto/jwt.py line 9, plus 3 more real hits elsewhere in the
+# same 4-snapshot corpus — see CHANGELOG.md). What IS assertable here,
+# and what these two lines actually exercise, is the suppression itself.
+SECRET_KEY = "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7"  # safe: Hardcoded Secret in Source
+
+# Same real-corpus pattern, but the dict-key assignment shape (Flask's
+# own app.config convention) rather than a bare module-level constant —
+# also found across the corpus (several other challenges hardcode
+# app.secret_key the same way). Same test-file-suppression caveat above.
+app.config["SECRET_KEY"] = "another-hardcoded-signing-key-value"  # safe: Hardcoded Secret in Source

@@ -471,6 +471,70 @@ corpus: fires only on the one real line, leaves the five pre-existing
 `%`-formatting hits in underground-bank's `main.py` untouched, and no new
 false positives anywhere else.
 
+**Hardcoded Secret in Source — any language (v1.26.0)**: continuing the
+same CyberSci audit, into nationals-2025-26's "assault_and_battery" web
+challenge's `crypto/jwt.py`:
+
+```python
+SECRET_KEY = "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7"
+```
+
+A JWT HS256 signing key, assigned as a plain string literal right in
+application source rather than read from the environment or a secrets
+manager. For a source-review CTF (the whole genre this tool targets),
+that's not a hardening nitpick — it's a flag-shaped bug on its own: anyone
+who can read this file can forge or decrypt anything signed/encrypted with
+the literal sitting right there. flagmap already had several "Hardcoded
+Secret in ..." checks, but all of them look at *configuration*:
+Dockerfiles, compose files, `.env` files — nothing was looking at the
+application's own `.py`/`.js`/etc. source for the same mistake baked in
+one layer deeper. Added a new `RAW_PATTERNS` entry tagged `"generic"`
+(so it runs against every language's regex layer, not just one) matching
+a small curated vocabulary of signing/encryption-key names — `SECRET_KEY`,
+`JWT_SECRET`, `SESSION_SECRET`, `API_KEY`, `PRIVATE_KEY`,
+`ENCRYPTION_KEY`, `AES_KEY`, `SIGNING_KEY` — assigned a quoted string
+literal of at least 8 characters, in either a bare `NAME = "..."` shape or
+a dict-key shape (`app.config["NAME"] = "..."`, Flask's own convention).
+Deliberately a fixed vocabulary list rather than any-variable-assigned-a-
+long-string-literal: the latter would fire on every API response fixture,
+every test password, every base64 blob in the corpus. The trade is the
+usual one for a `"generic"`-tagged regex rule in this file — real recall
+on the small set of names CTF challenges and real apps actually use for
+this, at the cost of missing an oddly-named variable (`FLASK_SIGNING_BLOB
+= "..."` wouldn't match). Because every `RAW_PATTERNS` regex in this file
+is compiled with `re.IGNORECASE` (see `patterns.py`'s `COMPILED_PATTERNS`
+construction), the vocabulary match is case-insensitive for free — which
+turned out to matter for one of the four real corpus hits below
+(`app.secret_key`, lowercase, Flask's own idiomatic spelling).
+
+Verified against the full 4-snapshot corpus: exactly four real hits, all
+genuine secrets baked into source, zero false positives anywhere else —
+`assault_and_battery/crypto/jwt.py:9` (the motivating case above),
+nationals-2024-25's `history-stealer/webapp/app.py:10`
+(`app.secret_key = "supersecretkey"`), and both
+`UnauthorizedAndroidApp1/main.py:8` and `UnauthorizedAndroidApp2/main.py:8`
+(`SECRET_KEY = "2UmgQru0xd0Xe1Xp2gGBCZev3"` / a one-character-different
+sibling value — two separate challenge variants sharing the same bug).
+
+This fix also surfaced a real, structural limitation of the regression
+harness rather than a bug in the rule itself. `is_test_file()` (in
+`scanner.py`) suppresses this rule's payload — correctly, via
+`NOISY_IN_TEST_FILES` — on any path with a `tests`/`specs`-style path
+segment, because a hardcoded `SECRET_KEY` in an actual test
+fixture/example-config file is expected, not a finding. But every fixture
+in this entire regression suite necessarily lives under
+`tests/fixtures/...`, which itself contains a `tests` segment — so there
+is no location inside this harness where the rule's raw "fires" case can
+ever be asserted with a `# ruleid:` marker; only its suppression, via a
+`# safe:` marker, is assertable here. This is the exact same limitation
+the pre-existing "Weak Auth Logic" hardcoded-credential rule already has
+(confirmed: no fixture anywhere in the suite asserts that rule's positive
+case either) — not a new gap, just the second time this project has run
+into it. The fixtures added for this rule (`tests/fixtures/python/vuln_sinks.py`
+and `clean_sinks.py`) exercise the suppression path only, with the real
+positive case verified directly against the live corpus instead, as
+described above.
+
 **Missing Authentication Check (`authn_guard.py`, v1.15.0) and guarded-
 deserialization advice (`pickle_guard.py`, v1.15.0)** both came out of
 testing flagmap against a real attached CTF challenge rather than a
