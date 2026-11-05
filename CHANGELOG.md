@@ -657,3 +657,54 @@ entry below.
   signals — proving every one of them is load-bearing, including the
   ordinary shallow-copy loop that motivated narrowing the design in the
   first place.
+- ~~Open Redirect allowlist that checks `.hostname` but never
+  `.protocol` — a `javascript:` scheme bypass that escalates an intended
+  redirect mitigation into script execution~~ — added in v1.33.0, see
+  ARCHITECTURE.md. From DownUnderCTF 2024's public "waifu" web challenge
+  (`src/app/src/utils/response.ts`):
+  ```ts
+  const redirectUrl = new URL(redirectTo, process.env.BASE_URL);
+  // Prevent open redirect
+  if ((redirectUrl.hostname ?? '') !== new URL(defaultRedirect).hostname) {
+    redirectTo = defaultRedirect;
+  }
+  const encodedRedirect = encode(redirectTo);
+  res.send(BROWSER_REDIRECT.replace("{REDIRECT}", encodedRedirect));
+  // BROWSER_REDIRECT embeds it as: window.location = "{REDIRECT}";
+  ```
+  The mitigation checks only `.hostname`, never `.protocol`. `new URL()`
+  parses the hostname the same way regardless of scheme, so
+  `javascript://waifu-app:3000/<payload>` has the SAME hostname as the
+  real app and sails through this exact check, carrying an
+  attacker-chosen scheme. The validated string is then assigned to
+  `window.location` — a browser navigating to a `javascript:` URL
+  executes it as code, regardless of any HTML-entity escaping applied to
+  the string (`encode()` here does nothing to stop this, since it's not
+  a markup-escaping bug: it's scheme confusion). The challenge's own
+  writeup walks through exactly this to steal an admin session via a
+  webhook. flagmap's existing "Open Redirect" rules all target the
+  simpler "no allowlist at all" shape; this is the same underlying
+  mistake (an under-validated redirect-ish target) with a worse outcome,
+  so it's filed under the same vuln name rather than a new one.
+
+  Added a single-line regex: two separate `.hostname` references joined
+  by an equality/inequality comparison on the same line (the canonical
+  "compare a parsed URL's hostname against an expected one" allowlist
+  idiom), with no `.protocol` reference anywhere on that line. Severity
+  "high" (script execution, not just phishing-redirect), confidence
+  "possible" (doesn't try to prove the compared URL is attacker-tainted,
+  or that `.protocol` isn't checked on some other line — same trade
+  several existing best-effort rules in this file already make).
+  Verified against both corpora: CyberSci's 2 pre-existing Open Redirect
+  hits are unchanged (confirmed via git-stash diff), and the full
+  DownUnderCTF 2024+2025 archive goes from 93 to 94 findings — exactly
+  the one real hit; a pre-existing, unrelated Open Redirect finding in
+  2025's `file_upload/appupload.py` (from an existing rule) is also
+  confirmed unchanged by the same diff, so DUCTF 2025's total stays at
+  146. Self-scan of `patterns.py` adds zero new self-matches (the new
+  rule's own illustrative comment happens to contain the exact
+  `.hostname`/`.hostname` shape it describes, but the rule is scoped to
+  `"js"`, and `patterns.py` itself is a `.py` file, so it's never even
+  evaluated against it). Added fixtures to `tests/fixtures/js/
+  vuln_sinks.js`/`clean_sinks.js`: the real hostname-only shape, and a
+  safe counterpart that also compares `.protocol` on the same line.

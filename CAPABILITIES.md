@@ -75,7 +75,12 @@ Ruby/Rails, Lua, Rust):
   content/section fields piped straight into `Paragraph()`) came back
   with zero findings from flagmap despite this being the intended bug.
 - Open Redirect (`header("Location: ".$_GET...)`, Flask `redirect()`, Express
-  `res.redirect()` from request data)
+  `res.redirect()` from request data; and — added v1.33.0, see
+  ARCHITECTURE.md — an allowlist that checks a parsed URL's `.hostname`
+  against an expected one but never its `.protocol`, letting a
+  `javascript://<same-hostname>/<payload>` URL pass the check and then
+  execute as code if the validated value reaches a navigation sink like
+  `window.location = ...` — script execution, not just a redirect)
 - NoSQL Injection (MongoDB `find()`/`update()` with the whole filter taken
   from the request body)
 - Mass Assignment (`**request.json` into a constructor, `findByIdAndUpdate`

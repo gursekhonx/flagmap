@@ -45,3 +45,17 @@ app.get("/read_safe", (req, res) => {
 // a single algorithm, however it's spelled, must never trip it.
 const verifyAlgSafe = { algorithms: ['RS256'] };  // safe: JWT / Auth Token Weakness
 const verifyAlgSafeHs = { algorithms: ["HS256", "HS512"] };  // safe: JWT / Auth Token Weakness
+
+// Correct redirect-target validation: checks .protocol as well as
+// .hostname on the same line, so the new hostname-only-check rule must
+// not fire here — a javascript:// payload would be rejected by this
+// .protocol comparison before the .hostname comparison even matters.
+function sendBrowserRedirectResponseSafe(res, redirectTo) {
+  const defaultRedirect = `${process.env.BASE_URL}/flag/`;
+  const redirectUrl = new URL(redirectTo, process.env.BASE_URL);
+  const expected = new URL(defaultRedirect);
+  if (redirectUrl.protocol !== expected.protocol || redirectUrl.hostname !== expected.hostname) {  // safe: Open Redirect
+    redirectTo = defaultRedirect;
+  }
+  res.send(`<script>window.location = "${redirectTo}";</script>`);
+}

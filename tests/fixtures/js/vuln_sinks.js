@@ -78,3 +78,18 @@ app.get("/admin.html", (req, res) => {
     if (!err && decoded['user'] == 'admin') res.sendFile("admin.html");
   });
 });
+
+// Mirrors DownUnderCTF 2024's real "waifu" web challenge
+// (src/app/src/utils/response.ts) almost verbatim: the allowlist check
+// compares only .hostname, never .protocol, so "javascript://<same
+// hostname>/<payload>" sails through with the same hostname as the real
+// app, then gets assigned to window.location — script execution, not
+// just an open redirect.
+function sendBrowserRedirectResponse(res, redirectTo) {
+  const defaultRedirect = `${process.env.BASE_URL}/flag/`;
+  const redirectUrl = new URL(redirectTo, process.env.BASE_URL);
+  if ((redirectUrl.hostname ?? '') !== new URL(defaultRedirect).hostname) {  // ruleid: Open Redirect
+    redirectTo = defaultRedirect;
+  }
+  res.send(`<script>window.location = "${redirectTo}";</script>`);
+}

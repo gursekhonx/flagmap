@@ -592,6 +592,61 @@ RAW_PATTERNS = [
         "?redirect=https://evil.example.com",
         "likely",
     ),
+    (
+        # Found in a real DownUnderCTF 2024 web challenge, "waifu"
+        # (src/app/src/utils/response.ts):
+        #
+        #   const redirectUrl = new URL(redirectTo as string, process.env.BASE_URL);
+        #   // Prevent open redirect
+        #   if ((redirectUrl.hostname ?? '') !== new URL(defaultRedirect).hostname) {
+        #       redirectTo = defaultRedirect;
+        #   }
+        #   const encodedRedirect = encode(redirectTo);
+        #   res.send(BROWSER_REDIRECT.replace("{REDIRECT}", encodedRedirect));
+        #   // BROWSER_REDIRECT embeds it as: window.location = "{REDIRECT}";
+        #
+        # The intended mitigation checks ONLY `.hostname` — never
+        # `.protocol` — so a URL like `javascript://waifu-app:3000/payload`
+        # parses with the SAME hostname as the real app (the part between
+        # `://` and the next `/` is the hostname, whatever the scheme),
+        # sailing straight through this check. The attacker's string, with
+        # scheme `javascript:`, is then assigned to `window.location` — and
+        # a browser navigating to a `javascript:` URL EXECUTES it as code,
+        # regardless of any HTML-entity escaping applied to the string
+        # value (`encode()` here), since this isn't a markup-escaping bug
+        # at all: it's a scheme-confusion bypass of an allowlist that only
+        # ever checked the host. This is the same underlying mistake as the
+        # "no allowlist at all" Open Redirect rules above — an
+        # under-validated redirect-ish target — just with a worse outcome
+        # (arbitrary script execution, not merely phishing), so it's filed
+        # under the same vuln name rather than inventing a new one.
+        #
+        # Single-line signal, deliberately narrow: TWO separate `.hostname`
+        # references joined by an equality/inequality comparison on the
+        # same line (the canonical "compare a parsed URL's hostname against
+        # an expected one" allowlist idiom), with NO `.protocol` reference
+        # anywhere on that same line. Doesn't try to prove `.protocol` is
+        # checked nowhere else in the file (that would risk false
+        # negatives on a legitimately split-up check) nor that the
+        # compared URL is attacker-tainted — same trade several existing
+        # best-effort rules in this file already make; a hostname-only
+        # comparison this is the ONLY line implementing is, in practice,
+        # the bug on its own, since nothing else could be catching the
+        # scheme instead.
+        "Open Redirect",
+        "js",
+        r"""^(?!.*\.protocol\b).*\.hostname\b.*(?:===|!==|==|!=).*\.hostname\b""",
+        "high",
+        "This allowlist check compares two `.hostname` values but never looks at `.protocol` anywhere on "
+        "this line. new URL() parses the hostname the same way regardless of scheme, so a URL like "
+        "\"javascript://<same-hostname>/<payload>\" passes this exact hostname check while carrying an "
+        "attacker-chosen scheme. If the validated value is later used as a navigation target (e.g. assigned "
+        "to window.location, or written into a <meta http-equiv=\"refresh\">), this is script execution, "
+        "not just an open redirect — the hostname-only check validates the wrong property.",
+        "Try \"javascript://<the-real-app's-hostname>:<port>/<payload-with-no-slash-until-the-real-code>\" "
+        "as the redirect target — same hostname, attacker-chosen scheme.",
+        "possible",
+    ),
 
     # ---------------- NoSQL INJECTION ----------------
     (

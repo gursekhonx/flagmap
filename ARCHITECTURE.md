@@ -1768,6 +1768,82 @@ array, never bracket-assigned). All three must produce zero findings —
 the first of them is the exact shape that sank the simpler two-signal
 design during development.
 
+**Open Redirect allowlist that validates `.hostname` but not
+`.protocol` (`patterns.py`, v1.33.0)**: from DownUnderCTF 2024's public
+"waifu" web challenge (`src/app/src/utils/response.ts`):
+
+```ts
+const redirectUrl = new URL(redirectTo, process.env.BASE_URL);
+// Prevent open redirect
+if ((redirectUrl.hostname ?? '') !== new URL(defaultRedirect).hostname) {
+  redirectTo = defaultRedirect;
+}
+const encodedRedirect = encode(redirectTo);
+res.send(BROWSER_REDIRECT.replace("{REDIRECT}", encodedRedirect));
+// BROWSER_REDIRECT embeds it as: window.location = "{REDIRECT}";
+```
+
+The mitigation checks only `.hostname`. `new URL()` parses the hostname
+identically regardless of scheme, so `javascript://waifu-app:3000/
+<payload>` carries the SAME hostname as the real app and passes this
+exact check while its scheme is `javascript:`. The validated string is
+then assigned to `window.location` — a browser navigating to a
+`javascript:` URL executes it as code, however the string itself was
+HTML-entity-escaped (`encode()` here does nothing against this, since
+it isn't a markup-escaping bug — the scheme is what matters, not the
+characters). The challenge's own writeup uses exactly this to steal an
+admin session via a webhook callback.
+
+flagmap's existing "Open Redirect" rules (PHP/`header("Location:
+".$_GET...)`, Flask `redirect(request.args.get(...))`, Express
+`res.redirect(req.query...)`, ASP.NET `Redirect(Request.Query...)`) all
+target the simpler shape of "no allowlist check at all." This is the
+same underlying mistake — an under-validated redirect-ish target — with
+a worse outcome (script execution, not just a phishing redirect), so
+it's filed under the same vuln name rather than a new one, consistent
+with this project's vuln-name-consolidation discipline.
+
+Single-line regex, deliberately narrow:
+
+```
+^(?!.*\.protocol\b).*\.hostname\b.*(?:===|!==|==|!=).*\.hostname\b
+```
+
+Two separate `.hostname` references joined by an equality/inequality
+comparison on the same line — the canonical "compare a parsed URL's
+hostname against an expected one" allowlist idiom — with no `.protocol`
+reference anywhere on that same line. Doesn't try to prove the compared
+URL is attacker-tainted, or that `.protocol` is never checked on some
+*other* line of the same file (that would risk false negatives on a
+legitimately split-up check) — same trade several existing best-effort
+rules in this file already make. Severity "high" rather than the
+existing Open Redirect rules' "medium," since the realistic outcome
+here is script execution, not merely a phishing redirect; confidence
+"possible," since this is a shape-based heuristic rather than confirmed
+taint.
+
+Verified against both corpora. CyberSci: its 2 pre-existing Open
+Redirect hits are unchanged, confirmed via `git stash` diff. DownUnderCTF
+2024+2025: total goes from 93 to 94 — exactly the one real hit; 2025's
+`file_upload/src/appupload.py` already had an unrelated, pre-existing
+Open Redirect finding from a different rule, also confirmed unchanged
+by the same diff, so that corpus's total stays at 146. Self-scanning
+`patterns.py` itself adds zero new self-matches: the new rule's own
+illustrative comment literally contains the `.hostname`/`.hostname`/
+`!==` shape it describes (confirmed by testing the regex against that
+exact comment line in isolation — it matches), but the rule is scoped
+to `"js"`, and `patterns.py` is itself a `.py` file evaluated only
+against `"python"`/`"generic"` patterns, so the `"js"`-scoped rule is
+never even tried against it — the same language-gating that protects
+every other language-specific pattern in this file from matching its
+own illustrative comments, not something special-cased for this rule.
+
+Added fixtures to the shared `tests/fixtures/js/vuln_sinks.js`/
+`clean_sinks.js` (a single-line regex check fits that shared-file
+convention, unlike the whole-file guard modules above): the real
+hostname-only shape, and a safe counterpart whose check compares
+`.protocol` as well as `.hostname` on the same line.
+
 `report_md.py` deliberately has no fixture category of its own: it's a
 pure renderer over `Finding`/`Chain` objects the regression suite above
 already exercises and validates, with no detection logic of its own to
