@@ -59,6 +59,37 @@ the whole file or gives you nothing):
 Not supported (see README roadmap): go.mod/go.sum (no Go CVEs in the
 table yet, so there's nothing for a parser to match against — not worth
 the added surface area until that changes).
+
+Also supported, as of v1.30.0, a different kind of "manifest" entirely:
+  - Dockerfile / Dockerfile.*       (the `FROM <image>:<tag>` line itself)
+A CTF "vulnerable dependency" challenge doesn't only ship an old Log4j or
+PyYAML in a language-package manifest — it can just as easily vendor a
+known-vulnerable *container image* wholesale and build nothing else on
+top of it. Real example: DownUnderCTF 2024's "hah-got-em" challenge,
+whose entire `src/Dockerfile` is three lines —
+
+    FROM gotenberg/gotenberg:8.0.3
+    COPY flag.txt /etc/flag.txt
+    CMD ["gotenberg", "--api-port=1337"]
+
+— with no application source at all. The vulnerability is the pinned
+base image itself: Gotenberg (an HTML-to-PDF conversion service built on
+Chromium) had no restriction on what a converted HTML document's
+`<iframe>`/`<img>` tags could point at through 8.0.3 — `file://` paths
+and internal-network URLs included — which is exactly the file-read/SSRF
+primitive the challenge is built around. Fixed in 8.1.0. This is the
+same *shape* of finding as everything else in CVE_TABLE (an exact
+version pin, matched offline against a tiny curated table, "likely"
+confidence because the version string is a fact, not a guess) — it just
+lives in a Dockerfile's `FROM` line instead of a language manifest, so
+it gets its own ecosystem key (`"docker"`) and its own tiny parser
+(`parse_dockerfile_from`) rather than forcing it through one of the
+language-specific ones above. Only an explicit `image:tag` is matched —
+a bare `FROM builder` referencing an earlier build stage's name has no
+colon and is skipped by construction (no stage-name denylist needed),
+and a `FROM image` / `FROM image:latest` with no real pin is left to
+config_patterns.py's existing "Unpinned Base Image Tag" check, which
+already covers that case.
 """
 
 import os
@@ -232,6 +263,21 @@ CVE_TABLE = {
              "fix": "Upgrade to struts2-core>=2.5.10.1 on the 2.5 branch."},
         ],
     },
+    "docker": {
+        "gotenberg/gotenberg": [
+            {"min_version": None, "fixed_in": "8.1.0",
+             "cve": "no assigned CVE — see gotenberg/gotenberg release notes for v8.1.0",
+             "severity": "high",
+             "why": "Gotenberg converts attacker-supplied HTML to PDF using Chromium under the hood. "
+                    "Through 8.0.3, nothing stops a converted document's <iframe>/<img> src from pointing at "
+                    "a file:// path or an internal-network URL, so the conversion itself is a built-in local-"
+                    "file-read/SSRF primitive — not a bug in whatever app calls Gotenberg, but one it inherits "
+                    "for free by vendoring this exact version. Fixed in 8.1.0 by restricting local/loopback "
+                    "resource loads during conversion.",
+             "fix": "Upgrade to gotenberg/gotenberg>=8.1.0, and keep the conversion service network-isolated "
+                    "regardless of version — HTML-to-PDF/screenshot services are a recurring SSRF surface."},
+        ],
+    },
 }
 
 
@@ -239,7 +285,7 @@ def _normalize_name(ecosystem: str, name: str) -> str:
     name = name.strip()
     if ecosystem == "python":
         return name.lower().replace("_", "-")
-    if ecosystem in ("node", "ruby", "php"):
+    if ecosystem in ("node", "ruby", "php", "docker"):
         return name.lower()
     return name  # java keys are "group:artifact", case-sensitive by convention
 
@@ -473,6 +519,29 @@ def parse_pom_xml(content: str):
         yield name, version, line_no, f"<dependency>{gm.group(1).strip()}:{am.group(1).strip()}:{version}</dependency>"
 
 
+_DOCKERFILE_FROM_RE = re.compile(
+    r"^\s*FROM\s+(?:--platform=\S+\s+)?([\w./-]+):([\w][\w.\-]*)(?:\s+[Aa][Ss]\s+\S+)?\s*$"
+)
+
+
+def parse_dockerfile_from(content: str):
+    """Yields (image, tag, line_no, line_text) for every `FROM <image>:<tag>`
+    line. A bare `FROM builder` (an earlier build stage's name in a
+    multi-stage build, not a real image) has no colon and never matches;
+    `FROM image` / `FROM image:latest` with no real pin is intentionally
+    left to config_patterns.py's "Unpinned Base Image Tag" check instead —
+    this parser only speaks to exact-version pins, same rule as every
+    other parser in this file."""
+    for line_no, line in enumerate(content.splitlines(), start=1):
+        m = _DOCKERFILE_FROM_RE.match(line)
+        if not m:
+            continue
+        image, tag = m.group(1), m.group(2)
+        if tag.lower() == "latest":
+            continue
+        yield image, tag, line_no, line.strip()
+
+
 _MANIFEST_PARSERS = {
     "requirements.txt": ("python", parse_requirements_txt),
     "Pipfile.lock": ("python", parse_pipfile_lock),
@@ -484,22 +553,44 @@ _MANIFEST_PARSERS = {
 }
 
 
+def _is_dockerfile(basename: str) -> bool:
+    lower = basename.lower()
+    return lower == "dockerfile" or lower.startswith("dockerfile.")
+
+
+def _resolve_parser(path: str):
+    """Returns (ecosystem, parser_func) for a manifest/lockfile path, or
+    None if this path isn't one flagmap knows how to parse. Dockerfiles
+    are matched by a naming convention (same as config_scanner.py's own
+    "dockerfile" category) rather than an exact-basename dict lookup,
+    since `Dockerfile.prod`/`Dockerfile.dev`-style names are common."""
+    basename = os.path.basename(path)
+    if basename in _MANIFEST_PARSERS:
+        return _MANIFEST_PARSERS[basename]
+    if _is_dockerfile(basename):
+        return "docker", parse_dockerfile_from
+    return None
+
+
 def _iter_manifest_files(root: str):
     if os.path.isfile(root):
-        if os.path.basename(root) in _MANIFEST_PARSERS:
+        if _resolve_parser(root) is not None:
             yield root
         return
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")]
         for fname in filenames:
-            if fname in _MANIFEST_PARSERS:
+            if fname in _MANIFEST_PARSERS or _is_dockerfile(fname):
                 yield os.path.join(dirpath, fname)
 
 
 def find_vulnerable_deps(root: str) -> List[DepFinding]:
     findings: List[DepFinding] = []
     for path in _iter_manifest_files(root):
-        ecosystem, parser = _MANIFEST_PARSERS[os.path.basename(path)]
+        resolved = _resolve_parser(path)
+        if resolved is None:
+            continue
+        ecosystem, parser = resolved
         content = _read(path)
         if content is None:
             continue

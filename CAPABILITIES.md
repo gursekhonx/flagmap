@@ -429,6 +429,14 @@ again specifically in CTF/training contexts:
   app-code check above is named after; this entry catches it from the
   pinned-version side even in a file where the app code itself looks
   fine at a glance.
+- **Gotenberg** < 8.1.0 (added v1.30.0) — no assigned CVE, but a
+  well-known-in-CTFs local-file-read/SSRF primitive built into the
+  HTML-to-PDF conversion service itself (a converted document's
+  `<iframe>`/`<img>` could reach `file://` paths and internal URLs,
+  unrestricted through 8.0.3). The first entry keyed by a *container
+  base image* (`FROM gotenberg/gotenberg:8.0.3` in a Dockerfile) rather
+  than a language-ecosystem manifest — see "Parsed manifests/lockfiles"
+  below for how that's matched.
 
 Parsed manifests/lockfiles: `requirements.txt` (exact `==` pins only —
 a range like `flask>=1.0` tells you nothing about what actually got
@@ -436,10 +444,15 @@ installed, so it's skipped, never guessed at), `Pipfile.lock`,
 `package-lock.json` (npm v1 and v2/v3 shapes), `yarn.lock`,
 `Gemfile.lock`, `composer.lock`, and `pom.xml` (skipping any `<version>`
 that's actually an unresolved `${property}` placeholder — same
-never-guess rule). Each is parsed by regex/line-scanning rather than a
-full JSON/XML parse, same style as the rest of flagmap, so a partial or
-slightly malformed file still yields whatever lines do match and keeps a
-real line number, rather than an all-or-nothing exception.
+never-guess rule), plus, as of v1.30.0, `Dockerfile`/`Dockerfile.*`'s own
+`FROM image:tag` line (matched only when it's an exact pin that's
+actually in the curated table — a `FROM builder` build-stage reference
+has no colon and never matches, and `FROM image`/`FROM image:latest`
+with no real pin is left to the separate "Unpinned Base Image Tag"
+config check, see below). Each is parsed by regex/line-scanning rather
+than a full JSON/XML parse, same style as the rest of flagmap, so a
+partial or slightly malformed file still yields whatever lines do match
+and keeps a real line number, rather than an all-or-nothing exception.
 
 Self-tested on first attempt with zero false positives this time (unlike
 loot.py's self-caught docstring bug): running it against flagmap's own
@@ -487,13 +500,18 @@ one would either be a no-op or a false-positive generator:
   path-traversal CVE, or any package/CVE pair not in `deps.py`'s hand-
   picked list — see "Vulnerable Dependencies") — the vulnerable code isn't
   in the challenge's own source at all, so no amount of pattern coverage
-  over *this* repo's files would ever see it, and `deps.py` only covers
-  manifests/lockfiles for 5 ecosystems against ~a dozen curated CVEs, not
-  container base images or the long tail of everything else. A *general*
-  version of this needs a live CVE/OSV-style dependency-version lookup
-  across every ecosystem and every base image — a fundamentally different
-  (and much more infrastructure-heavy) kind of check than the offline
-  curated table this tool ships instead.
+  over *this* repo's files would ever see it. As of v1.30.0 `deps.py` does
+  look at `FROM image:tag` lines too, not only language-ecosystem
+  manifests (one curated entry so far: `gotenberg/gotenberg` < 8.1.0, from
+  a real DownUnderCTF challenge whose entire bug was that exact pin — see
+  "Vulnerable Dependencies"), but that only narrows this gap, it doesn't
+  close it: still 5 language ecosystems plus one container image against
+  roughly a dozen curated CVEs total, not the long tail of every other
+  base image and package/CVE pair that exists (the `traefik` example above
+  still isn't covered). A *general* version of this needs a live CVE/OSV-
+  style dependency-version lookup across every ecosystem and every base
+  image — a fundamentally different (and much more infrastructure-heavy)
+  kind of check than the offline curated table this tool ships instead.
 - **Pure logic/semantic confusion bugs** — e.g. a signature that's verified
   correctly over raw bytes, but the *meaning* of those bytes is then
   re-derived a different way (OCR, a different parser) than what was

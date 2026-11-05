@@ -1,0 +1,1 @@
+gotenberg/gotenberg@8.0.3 (no assigned CVE — see gotenberg/gotenberg release notes for v8.1.0)

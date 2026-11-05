@@ -1561,6 +1561,58 @@ placeholder (same), and a handful of packages/versions with no CVE_TABLE
 entry at all (`flask`, `express`, `monolog/monolog`, etc. — must produce
 nothing).
 
+**Known-vulnerable pinned container base images (`deps.py`, v1.30.0)**:
+CVE_TABLE's seven parsers above all read language-ecosystem manifests —
+none of them look at a Dockerfile's own `FROM` line, even though a CTF
+"vulnerable dependency" challenge can vendor an entire container image
+instead of a language package. DownUnderCTF 2024's public "hah-got-em"
+web challenge does exactly that: its whole `src/Dockerfile` is
+
+```dockerfile
+FROM gotenberg/gotenberg:8.0.3
+COPY flag.txt /etc/flag.txt
+CMD ["gotenberg", "--api-port=1337"]
+```
+
+with no application source at all — the pinned image IS the challenge.
+Gotenberg (HTML-to-PDF via Chromium) placed no restriction through
+8.0.3 on a converted document's `<iframe>`/`<img>` reaching `file://`
+paths or internal URLs — a built-in local-file-read/SSRF primitive,
+fixed in 8.1.0. Scanning this directory previously returned nothing but
+a generic "Container Runs as Root" misconfig finding, a complete miss.
+
+Added a `"docker"` key to CVE_TABLE (currently just `gotenberg/
+gotenberg`, fixed in 8.1.0) and `parse_dockerfile_from()`, a tiny new
+parser matching `^\s*FROM\s+(?:--platform=\S+\s+)?(image):(tag)
+(?:\s+AS\s+stage)?\s*$` — the exact same min/fixed-version comparison
+every other CVE_TABLE entry already uses, just keyed by image name.
+`_iter_manifest_files`/`_resolve_parser` now also recognize any
+`Dockerfile`/`Dockerfile.*`-named file (the same naming convention
+`config_scanner.py`'s own "dockerfile" category already uses), rather
+than the plain exact-basename dict lookup every other manifest type
+uses, since `_MANIFEST_PARSERS` can't hold a wildcard key.
+
+Narrow by construction, not by denylist: a multi-stage `FROM builder`
+referencing an earlier stage's name has no colon, so the regex simply
+never matches it — no list of "known stage names to ignore" needed —
+and `FROM image` / `FROM image:latest` with no real pin is deliberately
+left alone, since `config_patterns.py`'s existing "Unpinned Base Image
+Tag" check already covers that gap; this one only ever speaks to an
+exact version that happens to be in the curated table, same restraint
+as every other CVE_TABLE entry.
+
+Verified with a new `tests/fixtures/deps/case2/` covering five
+Dockerfiles in one tree: the real vulnerable pin; an unrelated image
+with a real-looking version pin not in the table (`nginx:1.25.3`,
+plus the `node:20-alpine AS builder` stage above it); a bare `FROM
+base` stage-name reference; the exact fixed version (`8.1.0`); and an
+explicit `:latest` tag — `EXPECTED.txt` lists exactly the one real
+finding, proving the other four produce nothing. Full regression:
+190/190. CyberSci corpus count unchanged (392 — no Dockerfile in that
+archive pins a tracked image). Re-scanning the real `hah-got-em`
+challenge now reports `gotenberg/gotenberg@8.0.3` alongside (not
+instead of) the pre-existing root-user misconfig finding.
+
 `report_md.py` deliberately has no fixture category of its own: it's a
 pure renderer over `Finding`/`Chain` objects the regression suite above
 already exercises and validates, with no detection logic of its own to
