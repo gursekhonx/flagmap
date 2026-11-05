@@ -35,6 +35,7 @@ from .token_mass_assign_guard import find_token_mass_assign, TOKEN_MASS_ASSIGN_L
 from .aead_decipher_guard import find_aead_decipher_issues, AEAD_LANGUAGES
 from .store_html_xss_guard import find_store_html_xss, STORE_XSS_LANGUAGES
 from .signed_cookie_guard import find_signed_cookie_json, SIGNED_COOKIE_LANGUAGES
+from .orm_where_guard import find_orm_where_injection, ORM_WHERE_LANGUAGES
 
 # No hand-written vulnerable application code is ever a single line this long —
 # only minified/bundled vendor files (tailwindcss.js, jquery.min.js, etc.) are,
@@ -702,6 +703,30 @@ def scan_lines(path: str, language: str, lines: List[str], patterns: list) -> Li
                     "cookie that decodes to the string <victim> (or to an object/array of your choosing).",
                 payload="Register / submit the value j:\"admin\" (with the target username), then reuse the "
                         "signed cookie the server sets.",
+                confidence="likely",
+            ))
+
+    # Prisma/Sequelize `where:` filter that is an entire request object —
+    # the JS counterpart of the Python ORM filter-leak rule. See
+    # orm_where_guard.py's module docstring.
+    if language in ORM_WHERE_LANGUAGES:
+        for of in find_orm_where_injection(path, language, lines):
+            key = (of.line_no, "ORM Injection / Filter Leak")
+            if key in seen:
+                continue
+            seen.add(key)
+            findings.append(Finding(
+                file=of.file,
+                line_no=of.line_no,
+                line_text=of.line_text,
+                vuln_name="ORM Injection / Filter Leak",
+                severity="high",
+                why="An entire request object is used as this ORM query's `where` filter, so the client "
+                    "chooses the filter's keys and operators, not just values. With Express's nested query "
+                    "parsing (?a[b][gte]=x) that means relation traversal and comparison operators on fields "
+                    "the API never returns — a boolean oracle on, e.g., a related user's password.",
+                payload="?author[password][startsWith]=a (or [gte]=a with a binary search) — extend one "
+                        "character at a time while results still come back.",
                 confidence="likely",
             ))
 

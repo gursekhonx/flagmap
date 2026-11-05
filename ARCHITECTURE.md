@@ -2721,6 +2721,43 @@ The clean file fails against the old regex (checked by stashing the fix
 and re-running). Per-finding diff: UofTCTF 118 → 98, exactly the 20
 include lines; nothing else in any corpus.
 
+**Whole request object as a Prisma/Sequelize `where` (`orm_where_guard.py`,
+v1.56.0)**: from UofTCTF 2025's public "prismatic-blogs" challenge
+(`index.js`):
+
+```js
+let query = req.query;
+query.published = true;
+let posts = await prisma.post.findMany({where: query});
+```
+
+Express parses `?author[name]=White&author[password][gte]=M` into nested
+objects, which Prisma reads as a relation filter with a comparison
+operator. The API only returns posts, but whether any come back is an
+oracle on the author's password; the solve walks it character by
+character for each user, logs in, and finds the flag in an unpublished
+post. Setting `query.published = true` afterwards doesn't help: the
+attacker's keys sit alongside it. This is the JS shape of the Django
+`.filter(**request.data)` leak handled in v1.39.0, filed under the same
+"ORM Injection / Filter Leak" name.
+
+Two whole-file signals: a variable bound to an *entire* request object
+(`const|let|var X = req.query|req.body|req.params` with nothing after it
+— `req.query.id` is a value, not a filter), and `where: X` — or `where:
+req.query` directly — inside a call to a Prisma or Sequelize query method
+(`findMany`, `findFirst`, `findUnique`, `findAll`, `findOne`, `count`,
+`aggregate`, `updateMany`, `deleteMany`, `destroy`, ...). Fires on the
+call line. Not matched: a filter built from code-chosen keys with request
+values (`where: { id: Number(req.query.id) }`), which is the safe form
+and the `safe` fixture; also, as known blind spots, an object spread
+(`where: { ...req.query, published: true }`) and filters assembled over
+several lines.
+
+The new module's docstring first self-matched v1.39.0's Python rule
+(it quoted `.filter(**request.data)` when explaining the relationship);
+reworded. Per-finding corpus diff: UofTCTF +1 (`prismatic-blogs/src/
+index.js:17`), nothing else in any corpus.
+
 `report_md.py` deliberately has no fixture category of its own: it's a
 pure renderer over `Finding`/`Chain` objects the regression suite above
 already exercises and validates, with no detection logic of its own to

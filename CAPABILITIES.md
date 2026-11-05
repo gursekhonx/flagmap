@@ -115,8 +115,9 @@ Ruby/Rails, Lua, Rust):
   form/JSON dict, directly or via a variable, passed as the payload of a
   token-minting call like `jwt.encode(...)`/`create_token(...)`, so every
   submitted field becomes a signed claim)
-- ORM Injection / Filter Leak (added v1.39.0, see ARCHITECTURE.md,
-  Python: a whole request dict unpacked into an ORM lookup —
+- ORM Injection / Filter Leak (added v1.39.0, see ARCHITECTURE.md;
+  JS since v1.56.0 — a whole `req.query`/`req.body` as a Prisma or
+  Sequelize `where:` filter, see `orm_where_guard.py`. Python: a whole request dict unpacked into an ORM lookup —
   `Model.objects.filter(**request.data)`, `.exclude/.get(**...)`,
   SQLAlchemy `filter_by(**...)` — so the client picks lookup keys and can
   traverse relations, e.g. `created_by__password__startswith`, as a

@@ -1133,3 +1133,20 @@ entry below.
   clean file fails on the old regex, confirmed by stashing the fix);
   per-finding corpus diff: UofTCTF 118 → 98, exactly the 20 include lines,
   the three real lines kept; every other corpus unchanged.
+- ~~JS: a whole request object as a Prisma/Sequelize `where:` filter~~ —
+  added in v1.56.0, see ARCHITECTURE.md and CAPABILITIES.md. From UofTCTF
+  2025's public "prismatic-blogs" challenge: `let query = req.query;
+  query.published = true; prisma.post.findMany({where: query})`. Express's
+  qs parser turns `?author[password][gte]=M` into nested objects, so the
+  client writes Prisma filter syntax — relation traversal plus an
+  operator on a field the API never returns — and the solve reads each
+  author's password from whether posts come back. The JS counterpart of
+  v1.39.0's Python "ORM Injection / Filter Leak". Added
+  `orm_where_guard.py`: a variable bound to an entire `req.query/body/
+  params` (not a member of one), then `where: <that variable>` (or the
+  request object directly) inside a Prisma/Sequelize query-method call.
+  The new module's docstring first self-matched the Python ORM rule it
+  referenced; reworded. Verified: 283/283 regression (Prisma via a
+  variable and Sequelize direct as `ruleid`; code-chosen keys with request
+  values as `safe`); per-finding corpus diff: UofTCTF +1, the real line;
+  every other corpus unchanged.
