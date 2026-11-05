@@ -2758,6 +2758,48 @@ The new module's docstring first self-matched v1.39.0's Python rule
 reworded. Per-finding corpus diff: UofTCTF +1 (`prismatic-blogs/src/
 index.js:17`), nothing else in any corpus.
 
+**`new RegExp(<request data>)` (`ast_engine.py`, v1.57.0)**: from
+UofTCTF 2025's public "code-db" challenge (`app.js`):
+
+```js
+const query = (req.body.query || '').trim();
+...
+if (query.startsWith('/') && query.endsWith('/')) {
+    const regexPattern = query.slice(1, -1);
+    try {
+        searchRegex = new RegExp(regexPattern, 'g');
+```
+
+The compiled pattern runs over every stored code sample, including a
+hidden one containing the flag. The solve sends
+`/^(?=uoftctf{a).*.*.*.*.*.*.*.*.*.*.*.*.*!!!!!!!!!!!!$/`: when the
+lookahead prefix matches, the `.*` chain backtracks catastrophically
+against the unmatchable `!` tail and the response takes seconds; when
+it doesn't, it returns at once. Response time leaks the flag a character
+at a time.
+
+Two changes. JS `new_expression` is now in `CALL_NODE_TYPES` and
+`_call_info` reads its `constructor` field, so a constructor can be a
+sink (none could before). `RegExp` is a new JS sink, "Regex Injection /
+ReDoS" — its own name, since none of the existing classes fit (v1.41.0's
+Mongo `$regex` rule is filed under NoSQL Injection because that's where
+its pattern goes). The two-hop flow through `.trim()` and `.slice()` was
+already handled by existing propagation.
+
+The first fixture run reported `new RegExp(escapeRegExp(req.body.q))`.
+Escaping a regex is sink-specific — the escaped string is just as
+dangerous in SQL or a shell command — so it doesn't belong in
+`SANITIZER_CALLS`, which is reserved for numeric casts that are safe
+everywhere. Instead `_ScopeState` gained a `regex_escaped` set (names
+whose current value came straight from an `escapeRegExp`/`escapeRegex`/
+`escapeStringRegexp`/`_.escapeRegExp`-style call), and the `RegExp` sink
+skips an inline escape call or such a name — the same sink-specific shape
+as Open Redirect's same-origin exemption.
+
+Per-finding corpus diff: UofTCTF 99 → 100 (`code-db/src/app.js:97`) and
+no other change anywhere — including none from making every `new X(...)`
+a call site.
+
 `report_md.py` deliberately has no fixture category of its own: it's a
 pure renderer over `Finding`/`Chain` objects the regression suite above
 already exercises and validates, with no detection logic of its own to

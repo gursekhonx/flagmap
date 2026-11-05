@@ -109,6 +109,10 @@ Ruby/Rails, Lua, Rust):
   from the request body; and — added v1.41.0, see ARCHITECTURE.md, any
   language — a `$regex` operator whose pattern is an unescaped variable,
   a prefix oracle / ReDoS if it carries request data)
+- Regex Injection / ReDoS (added v1.57.0, JS, AST-tracked): request data
+  compiled with `new RegExp(...)` — a timing/match oracle against
+  whatever it's run over, and a ReDoS either way; skipped when the input
+  went through an `escapeRegExp`-style call first
 - Mass Assignment (`**request.json` into a constructor, `findByIdAndUpdate`
   with the raw request body; and — added v1.38.0, see
   `token_mass_assign_guard.py`/ARCHITECTURE.md, Python — the whole request

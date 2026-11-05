@@ -89,3 +89,13 @@ app.post("/render", async (req, res) => {
   const { tool } = defaults;
   exec(tool);  // safe: Command Injection
 });
+
+// A constant pattern, and request text escaped before compiling.
+const datePattern = new RegExp("^\\d{4}-\\d{2}-\\d{2}$");  // safe: Regex Injection / ReDoS
+app.post("/search2", (req, res) => {
+  const term = escapeRegExp(req.body.q);
+  const literal = new RegExp(term);  // safe: Regex Injection / ReDoS
+});
+app.post("/search3", (req, res) => {
+  const hits = new RegExp(_.escapeRegExp(req.body.q), "i");  // safe: Regex Injection / ReDoS
+});

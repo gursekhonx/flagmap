@@ -1150,3 +1150,22 @@ entry below.
   variable and Sequelize direct as `ruleid`; code-chosen keys with request
   values as `safe`); per-finding corpus diff: UofTCTF +1, the real line;
   every other corpus unchanged.
+- ~~JS `new RegExp(<request data>)`~~ — added in v1.57.0, see
+  ARCHITECTURE.md and CAPABILITIES.md. From UofTCTF 2025's public
+  "code-db" challenge: a search box accepts `/.../`, compiles the inner
+  text with `new RegExp(regexPattern, 'g')`, and runs it over every stored
+  code sample, including a hidden one with the flag. The solve sends
+  `/^(?=uoftctf{a).*.*.*...!!!$/`: when the lookahead matches, the
+  catastrophic tail backtracks for seconds, so response time leaks the
+  flag. Two engine changes: JS `new_expression` nodes are now call sites
+  (constructors couldn't be sinks before), and `RegExp` is a sink under a
+  new "Regex Injection / ReDoS" name. The pattern is reached through two
+  hops (`(req.body.query || '').trim()` → `.slice(1, -1)`), which the
+  existing propagation already handled. A first fixture run flagged
+  `new RegExp(escapeRegExp(...))`: escaping is sink-specific (an escaped
+  regex string is still dangerous in SQL or a shell), so rather than a
+  global sanitizer it's a per-sink exemption, like Open Redirect's
+  same-origin exemption — an escape call inline, or a name whose current
+  value came from one. Verified: 287/287 regression; per-finding corpus
+  diff: UofTCTF 99 → 100, the real line — no other change, including from
+  treating `new X(...)` as calls; `ast_engine.py` self-scan clean.

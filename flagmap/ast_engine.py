@@ -169,7 +169,9 @@ SCOPE_NODE_TYPES = {
 
 CALL_NODE_TYPES = {
     "python": {"call"},
-    "js": {"call_expression"},
+    # (v1.57.0) new_expression too, so constructor calls like
+    # `new RegExp(x)` can be sinks — see the "RegExp" entry in SINKS.
+    "js": {"call_expression", "new_expression"},
     "php": {"function_call_expression", "member_call_expression"},
     "go": {"call_expression"},
     "java": {"method_invocation"},
@@ -414,6 +416,16 @@ SINKS = {
         # is only reachable that way. Same family as the gotenberg deps
         # entry (v1.30.0): an HTML-to-PDF renderer is a built-in SSRF.
         "setContent": ("SSRF (Server-Side Request Forgery)", "arg0", "tainted"),
+        # (v1.57.0) A regular expression compiled from request data. Found
+        # in UofTCTF 2025's public "code-db" web challenge (app.js): a
+        # search box accepting `/.../` compiles the inner text with
+        # `new RegExp(pattern, 'g')` and runs it over every stored code
+        # sample — including a hidden one holding the flag. The solve
+        # sends `/^(?=uoftctf{a).*.*.*...!!!$/`: when the lookahead
+        # matches, the catastrophic tail backtracks for seconds, so the
+        # response time leaks the flag one character at a time. Even
+        # without a hidden file, a client-chosen pattern is a ReDoS.
+        "RegExp": ("Regex Injection / ReDoS", "arg0", "tainted"),
     },
     "php": {
         "query": ("SQL Injection", "arg0", "tainted"),
@@ -619,11 +631,26 @@ def _is_same_origin_redirect(node) -> bool:
 
 
 class _ScopeState:
-    __slots__ = ("tainted", "built")
+    __slots__ = ("tainted", "built", "regex_escaped")
 
     def __init__(self):
         self.tainted: Set[str] = set()
         self.built: Set[str] = set()
+        # (v1.57.0) names whose current value came straight out of a
+        # regex-escaping call — sink-specific, so it lives here rather than
+        # in SANITIZER_CALLS (an escaped regex string is still dangerous
+        # in SQL or a shell; it's only safe as a RegExp pattern).
+        self.regex_escaped: Set[str] = set()
+
+
+_REGEX_ESCAPE_RE = re.compile(r"^(?:[\w$.]*\.)?(?:escapeRegExp|escapeRegex|escapeStringRegexp|escape_regex|regexEscape|escapeRegexp)$", re.IGNORECASE)
+
+
+def _is_regex_escape_call(node, language) -> bool:
+    if node is None:
+        return False
+    info = _call_info(node, language) if node.type in CALL_NODE_TYPES.get(language, ()) else None
+    return bool(info and _REGEX_ESCAPE_RE.match(info[0]))
 
 
 def _matched_taint_source(node, var_set: Set[str], language: str) -> Optional[str]:
@@ -751,7 +778,7 @@ def _call_info(node, language):
             return _text(fn), False, None, args
         return None
     if language == "js":
-        fn = node.child_by_field_name("function")
+        fn = node.child_by_field_name("constructor" if t == "new_expression" else "function")
         args = node.child_by_field_name("arguments")
         if fn is None:
             return None
@@ -944,6 +971,11 @@ def _check_call_sink(node, language, state: _ScopeState, findings, path, lines):
             return
         if vuln == "Open Redirect" and _is_same_origin_redirect(target):
             return  # a leading single "/" can only ever redirect on-site
+        if vuln == "Regex Injection / ReDoS" and (
+            _is_regex_escape_call(target, language)
+            or (target.type == IDENTIFIER_NODE_TYPE[language] and _text(target) in state.regex_escaped)
+        ):
+            return  # escaped first: the input can only ever match itself literally
         matched = _matched_taint_source(target, var_set, language)
         if matched:
             _emit(findings, path, lines, node, vuln, matched)
@@ -1260,6 +1292,10 @@ def _walk(node, language, state: _ScopeState, ctx: _Ctx):
                 state.tainted.discard(name)
             elif _matched_taint_source(rhs, state.tainted, language):
                 state.tainted.add(name)
+            if _is_regex_escape_call(rhs, language):
+                state.regex_escaped.add(name)
+            else:
+                state.regex_escaped.discard(name)
             if language == "python" and t == "augmented_assignment":
                 state.built.add(name)
         elif (language == "js" and lhs is not None and rhs is not None

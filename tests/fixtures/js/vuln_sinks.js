@@ -128,3 +128,10 @@ app.get("/ua", (req, res) => {
   const agent = req.headers["user-agent"];
   execSync(agent);  // ruleid: Command Injection
 });
+
+// Request data compiled as a regex — mirrors UofTCTF 2025 "code-db".
+app.post("/search", (req, res) => {
+  const query = (req.body.query || '').trim();
+  const regexPattern = query.slice(1, -1);
+  const searchRegex = new RegExp(regexPattern, 'g');  // ruleid: Regex Injection / ReDoS
+});
