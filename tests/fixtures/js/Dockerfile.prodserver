@@ -1,0 +1,7 @@
+# Safe counterpart: build, then run the production server.
+FROM node:23.7.0-alpine3.20
+WORKDIR /app
+COPY . .
+RUN pnpm i --frozen-lockfile && pnpm run build  # safe: Debug Mode Enabled
+USER node
+CMD ["pnpm", "run", "start"]  # safe: Debug Mode Enabled

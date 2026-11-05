@@ -1067,3 +1067,18 @@ entry below.
   from non-request objects `safe`); per-finding corpus diff: LA CTF 189 →
   190, the real line only — the destructuring fix surfaced nothing else in
   any corpus; `ast_engine.py` self-scan clean.
+- ~~Final image starts a development server (`next dev`, `npm run dev`,
+  ...)~~ — added in v1.52.0, see ARCHITECTURE.md and CAPABILITIES.md.
+  From LA CTF 2025's public "old-site" challenge: the Dockerfile ends
+  `CMD ["pnpm", "run", "dev"]` with `"dev": "next dev --turbopack"`, and
+  the solve plants `//#sourceMappingURL=/flag.txt` in a guestbook file and
+  reads the flag through the dev server's `/__nextjs_source-map` endpoint.
+  Added a Dockerfile check for `next dev`, `npm|pnpm|yarn|bun [run] dev`
+  or `nodemon` in a CMD/ENTRYPOINT, filed as "Debug Mode Enabled". A
+  first per-line draft flagged DUCTF 2024 "sunzi-perfect-math-class",
+  whose `npm run dev` CMD is in an intermediate build stage that the
+  final nginx stage replaces — so it's a whole-file check that only looks
+  at the last `FROM` stage. Verified: 269/269 regression (new
+  `Dockerfile.devserver` / `.prodserver` / `.multistage` fixtures, the
+  last mirroring sunzi); per-finding corpus diff: LA CTF 190 → 191, the
+  real line only; every other corpus unchanged.

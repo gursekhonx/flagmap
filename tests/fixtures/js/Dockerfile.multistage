@@ -1,0 +1,13 @@
+# Safe: the dev-server CMD is in an intermediate stage; the final stage
+# (nginx serving the built files) is what actually runs. Mirrors DUCTF 2024
+# "sunzi-perfect-math-class".
+FROM node:22.3.0-alpine3.19 as development
+WORKDIR /app
+COPY . /app
+CMD [ "npm", "run", "dev"]  # safe: Debug Mode Enabled
+FROM development as build
+RUN npm run build
+FROM nginx:alpine
+COPY --from=build /app/dist /usr/share/nginx/html
+USER nginx
+ENTRYPOINT [ "nginx" , "-g", "daemon off;"]

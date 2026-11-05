@@ -2578,6 +2578,44 @@ destructured-request shape was mostly feeding sinks other rules already
 cover by regex. Fixtures added to the shared JS `vuln_sinks.js`/
 `clean_sinks.js`.
 
+**Dev server as the container's start command (`config_scanner.py`,
+v1.52.0)**: from LA CTF 2025's public "old-site" challenge, a Next.js
+guestbook whose Dockerfile ends:
+
+```dockerfile
+USER nextjs
+...
+CMD ["pnpm", "run", "dev"]
+```
+
+with `"dev": "next dev --turbopack"` in `package.json`. A Next.js dev
+server answers development-only routes; the solve POSTs a guestbook
+message containing `//#sourceMappingURL=/flag.txt`, then requests
+`/__nextjs_source-map?filename=file:///app/guestbook.txt`, and the
+dev server follows the comment and returns the flag file. Production
+would be `next build` then `next start`, with none of those routes.
+
+New Dockerfile check, filed under the existing "Debug Mode Enabled"
+name: a `CMD`/`ENTRYPOINT` containing `next dev`, `npm|pnpm|yarn|bun
+[run] dev`, or `nodemon` (exec-form and shell-form both match, since the
+regex allows quotes and commas between words). The first draft was a
+per-line `config_patterns.py` rule, and the corpus diff showed why that's
+wrong: DUCTF 2024's "sunzi-perfect-math-class" has `CMD [ "npm", "run",
+"dev"]` in a stage named `development`, then a final `FROM nginx:alpine`
+stage that serves the built files — the dev CMD never runs. Only the last
+stage's start command matters, so it's now a whole-file check in
+`_whole_file_checks()` (next to the "no USER directive" check) that scans
+from the last `FROM` onward. That draft rule was removed from
+`config_patterns.py` entirely.
+
+Verified: per-finding corpus diff LA CTF 190 → 191 (old-site line 23);
+DUCTF 2024 back to unchanged; everything else unchanged. Fixtures:
+`tests/fixtures/js/Dockerfile.devserver` (the real shape),
+`Dockerfile.prodserver` (build + `run start`), `Dockerfile.multistage`
+(the sunzi shape) — Dockerfile fixtures sit under `js/` because the
+harness picks up any file there with `# ruleid`/`# safe` markers and
+`scan_path` routes a `Dockerfile.*` name through the config scanner.
+
 `report_md.py` deliberately has no fixture category of its own: it's a
 pure renderer over `Finding`/`Chain` objects the regression suite above
 already exercises and validates, with no detection logic of its own to

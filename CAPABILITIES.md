@@ -158,7 +158,8 @@ Ruby/Rails, Lua, Rust):
 - Host Header Injection (`$_SERVER['HTTP_HOST']`, `request.host`,
   `req.headers.host` used to build URLs)
 - Debug Mode Enabled (Flask `debug=True`, Django `DEBUG=True`, forced
-  `display_errors`)
+  `display_errors`; and — added v1.52.0 — a Dockerfile whose final stage
+  starts a dev server: `next dev`, `npm|pnpm|yarn|bun run dev`, `nodemon`)
 - Weak Auth Logic (PHP loose `==` type juggling, `strcmp` bypass, hardcoded
   secrets; and — added v1.36.0, see `xff_trust_guard.py`/ARCHITECTURE.md,
   Python/JS/Go/PHP — a client IP read from the `X-Forwarded-For`/

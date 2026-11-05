@@ -100,6 +100,12 @@ def classify_config_file(path: str, content: str) -> List[str]:
     return categories
 
 
+_DEV_SERVER_CMD_RE = re.compile(
+    r"""^\s*(?:CMD|ENTRYPOINT)\b.*?(?:\bnext["',\s]+dev\b|\b(?:npm|pnpm|yarn|bun)["',\s]+(?:run["',\s]+)?dev\b|\bnodemon\b)""",
+    re.IGNORECASE,
+)
+
+
 def _whole_file_checks(path: str, category: str, content: str, lines: List[str]) -> List[ConfigFinding]:
     """Checks that depend on the ABSENCE of something, or a combination of
     two lines, rather than a single matching line — can't be expressed as a
@@ -122,6 +128,38 @@ def _whole_file_checks(path: str, category: str, content: str, lines: List[str])
                 fix="Add a non-root USER before the final CMD/ENTRYPOINT, e.g. `USER appuser`.",
                 confidence="possible",
             ))
+
+        # (v1.52.0) The image's start command runs a development server.
+        # Found in LA CTF 2025's public "old-site" web challenge: its
+        # Dockerfile ends `CMD ["pnpm", "run", "dev"]`, package.json's "dev"
+        # is `next dev --turbopack`, and the solve reads /flag.txt through
+        # the dev server's `/__nextjs_source-map?filename=...` endpoint after
+        # planting a `//#sourceMappingURL=` comment. Whole-file rather than a
+        # per-line rule because only the FINAL build stage's CMD/ENTRYPOINT
+        # runs: a first per-line draft flagged DUCTF 2024
+        # "sunzi-perfect-math-class", whose `npm run dev` CMD sits in an
+        # intermediate `development` stage that the final nginx stage
+        # replaces entirely.
+        last_from = 0
+        for i, line in enumerate(lines):
+            if re.match(r"^\s*FROM\s+", line, re.IGNORECASE):
+                last_from = i
+        for i in range(last_from, len(lines)):
+            line = lines[i]
+            if _DEV_SERVER_CMD_RE.search(line):
+                findings.append(ConfigFinding(
+                    file=path, line_no=i + 1, line_text=line.strip()[:200],
+                    name="Debug Mode Enabled",
+                    severity="medium",
+                    why="The final image's start command runs a development server (next dev, npm/pnpm/yarn/"
+                        "bun run dev, nodemon). Dev servers ship debugging endpoints, verbose errors, source "
+                        "maps and hot-reload machinery that production builds strip — Next.js's dev server, "
+                        "for one, has /__nextjs_source-map and /__nextjs_original-stack-frame endpoints that "
+                        "read files on the server.",
+                    fix="Build the app in the image and start the production server (e.g. next build + next "
+                        "start).",
+                    confidence="likely",
+                ))
 
     elif category == "ftp":
         has_anon = re.search(r"^\s*anonymous_enable\s*=\s*YES", content, re.MULTILINE | re.IGNORECASE)
